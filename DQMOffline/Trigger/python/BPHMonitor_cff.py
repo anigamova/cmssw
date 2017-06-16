@@ -470,25 +470,28 @@ Dimuon0_photon2.DMSelection_ref = cms.string("M<30 && abs(Eta)<2.4")
 Dimuon0_L3TnP_Jpsi = hltBPHmonitoring.clone()
 Dimuon0_L3TnP_Jpsi.FolderName = cms.string('HLT/BPH/DiMu0_L1_L3TnP_Jpsi/')
 Dimuon0_L3TnP_Jpsi.tnp = cms.int32(1)
+Dimuon0_L3TnP_Jpsi.L3 = cms.int32(0)
 Dimuon0_L3TnP_Jpsi.nofset = cms.int32(1)
+##Dimuon0_L3TnP_Jpsi.Jpsi = cms.int32(1)
 Dimuon0_L3TnP_Jpsi.numGenericTriggerEventPSet.hltPaths = cms.vstring("HLT_Mu7p5_L2Mu2_Jpsi_v*")
 Dimuon0_L3TnP_Jpsi.numGenericTriggerEventPSet.l1Algorithms = cms.vstring("L1_DoubleMu0_SQ")
 Dimuon0_L3TnP_Jpsi.denGenericTriggerEventPSet.hltPaths = cms.vstring("HLT_Mu7p5_L2Mu2_Jpsi_v*")
 Dimuon0_L3TnP_Jpsi.denGenericTriggerEventPSet.l1Algorithms = cms.vstring("L1_DoubleMu0_SQ")
 Dimuon0_L3TnP_Jpsi.muoSelection_ref = cms.string("pt>7.5 &  abs(eta)<2.4 &  isGlobalMuon  & innerTrack.hitPattern.trackerLayersWithMeasurement>5 & innerTrack.hitPattern.numberOfValidPixelHits>0 ")
-Dimuon0_L3TnP_Jpsi.muoSelection_ = cms.string("pt>7.5 & abs(eta)<2.4 & isGlobalMuon  & innerTrack.hitPattern.trackerLayersWithMeasurement>5 & innerTrack.hitPattern.numberOfValidPixelHits>0 ")
+Dimuon0_L3TnP_Jpsi.muoSelection = cms.string("pt>7.5 & abs(eta)<2.4 & isGlobalMuon  & innerTrack.hitPattern.trackerLayersWithMeasurement>5 & innerTrack.hitPattern.numberOfValidPixelHits>0 ")
 
 Dimuon0_L3TnP_Upsilon = hltBPHmonitoring.clone()
 Dimuon0_L3TnP_Upsilon.FolderName = cms.string('HLT/BPH/DiMu0_L1_L3TnP_Upsilon/')
 Dimuon0_L3TnP_Upsilon.tnp = cms.int32(1)
-Dimuon0_L3TnP_Upsilon.Upsilon = cms.int32(1)
+Dimuon0_L3TnP_Upsilon.L3 = cms.int32(0)
+##Dimuon0_L3TnP_Upsilon.Upsilon = cms.int32(1)
 Dimuon0_L3TnP_Upsilon.nofset = cms.int32(1)
 Dimuon0_L3TnP_Upsilon.numGenericTriggerEventPSet.hltPaths = cms.vstring("HLT_Mu7p5_L2Mu2_Upsilon_v*")
 Dimuon0_L3TnP_Upsilon.numGenericTriggerEventPSet.l1Algorithms = cms.vstring("L1_DoubleMu0_SQ")
 Dimuon0_L3TnP_Upsilon.denGenericTriggerEventPSet.hltPaths = cms.vstring("HLT_Mu7p5_L2Mu2_Upsilon_v*")
 Dimuon0_L3TnP_Upsilon.denGenericTriggerEventPSet.l1Algorithms = cms.vstring("L1_DoubleMu0_SQ")
 Dimuon0_L3TnP_Upsilon.muoSelection_ref = cms.string("pt>7.5 &  abs(eta)<2.4 &  isGlobalMuon  & innerTrack.hitPattern.trackerLayersWithMeasurement>5 & innerTrack.hitPattern.numberOfValidPixelHits>0 ")
-Dimuon0_L3TnP_Upsilon.muoSelection_ = cms.string("pt>7.5 & abs(eta)<2.4 & isGlobalMuon  & innerTrack.hitPattern.trackerLayersWithMeasurement>5 & innerTrack.hitPattern.numberOfValidPixelHits>0 ")
+Dimuon0_L3TnP_Upsilon.muoSelection = cms.string("pt>7.5 & abs(eta)<2.4 & isGlobalMuon  & innerTrack.hitPattern.trackerLayersWithMeasurement>5 & innerTrack.hitPattern.numberOfValidPixelHits>0 ")
 ###
 ###HLT OS 
 
@@ -498,12 +501,24 @@ Dimuon0_HLT_OS.tnp = cms.int32(0)
 Dimuon0_HLT_OS.nofset = cms.int32(2)
 Dimuon0_HLT_OS.Jpsi = cms.int32(1)
 Dimuon0_HLT_OS.numGenericTriggerEventPSet.hltPaths = cms.vstring("HLT_Dimuon0_Jpsi_NoVertexing_v*")
-Dimuon0_HLT_OS.numGenericTriggerEventPSet.l1Algorithms = cms.vstring("L1_DoubleMu4_SQ_OS_dR_Max1p2 OR L1_DoubleMu0er1p5_SQ_OS_dR_Max1p4")
+Dimuon0_HLT_OS.numGenericTriggerEventPSet.l1Algorithms = cms.vstring("L1_DoubleMu0_SQ_OS")
 Dimuon0_HLT_OS.denGenericTriggerEventPSet.hltPaths = cms.vstring("HLT_Dimuon0_Jpsi_NoVertexing_NoOS_v*")
-Dimuon0_HLT_OS.denGenericTriggerEventPSet.l1Algorithms = cms.vstring("L1_DoubleMu4_SQ_OS_dR_Max1p2 OR L1_DoubleMu0er1p5_SQ_OS_dR_Max1p4")
+Dimuon0_HLT_OS.denGenericTriggerEventPSet.l1Algorithms = cms.vstring("L1_DoubleMu0_SQ")
 Dimuon0_HLT_OS.muoSelection_ref = cms.string("pt>5 && abs(eta)<2.4 &  isGlobalMuon  & innerTrack.hitPattern.trackerLayersWithMeasurement>5 & innerTrack.hitPattern.numberOfValidPixelHits>0 ")
 Dimuon0_HLT_OS.DMSelection_ref = cms.string("abs(Eta)<2.4")
 
+
+Dimuon0_HLT_OS1 = hltBPHmonitoring.clone()
+Dimuon0_HLT_OS1.FolderName = cms.string('HLT/BPH/DiMu0_Jpsi_L1_HLT_OS_1')
+Dimuon0_HLT_OS1.tnp = cms.int32(0)
+Dimuon0_HLT_OS1.nofset = cms.int32(2)
+Dimuon0_HLT_OS1.Jpsi = cms.int32(1)
+Dimuon0_HLT_OS1.numGenericTriggerEventPSet.hltPaths = cms.vstring("HLT_Dimuon0_Jpsi_L1_NoOS_v*")
+Dimuon0_HLT_OS1.numGenericTriggerEventPSet.l1Algorithms = cms.vstring("L1_DoubleMu0_SQ")
+Dimuon0_HLT_OS1.denGenericTriggerEventPSet.hltPaths = cms.vstring("HLT_Dimuon0_Jpsi_NoVertexing_NoOS_v*")
+Dimuon0_HLT_OS1.denGenericTriggerEventPSet.l1Algorithms = cms.vstring("L1_DoubleMu0_SQ")
+Dimuon0_HLT_OS1.muoSelection_ref = cms.string("pt>5 && abs(eta)<2.4 &  isGlobalMuon  & innerTrack.hitPattern.trackerLayersWithMeasurement>5 & innerTrack.hitPattern.numberOfValidPixelHits>0 ")
+Dimuon0_HLT_OS1.DMSelection_ref = cms.string("abs(Eta)<2.4")
 
 ###
 ###Loose vertex Jpsi
@@ -559,6 +574,46 @@ Dimuon0_addTrack_Jpsi.denGenericTriggerEventPSet.l1Algorithms = cms.vstring("L1_
 Dimuon0_addTrack_Jpsi.muoSelection_ref = cms.string("pt>5 && abs(eta)<2.4 &  isGlobalMuon  & innerTrack.hitPattern.trackerLayersWithMeasurement>5 & innerTrack.hitPattern.numberOfValidPixelHits>0 ")
 Dimuon0_addTrack_Jpsi.DMSelection_ref = cms.string("abs(Eta)<2.4")
 
+Dimuon0_addDTrack_Jpsi = hltBPHmonitoring.clone()
+Dimuon0_addDTrack_Jpsi.FolderName = cms.string('HLT/BPH/DiMu0_L1_addDTrack_Jpsi/')
+Dimuon0_addDTrack_Jpsi.tnp = cms.int32(0)
+Dimuon0_addDTrack_Jpsi.nofset = cms.int32(11)
+Dimuon0_addDTrack_Jpsi.numGenericTriggerEventPSet.hltPaths = cms.vstring("HLT_DoubleMu4_JpsiTrkTrk_Displaced_Mcut_v*")##needs to be corrected
+Dimuon0_addDTrack_Jpsi.numGenericTriggerEventPSet.l1Algorithms = cms.vstring("L1_DoubleMu4_SQ_OS_dR_Max1p2 OR L1_DoubleMu0er1p5_SQ_OS_dR_Max1p4")
+Dimuon0_addDTrack_Jpsi.denGenericTriggerEventPSet.hltPaths = cms.vstring("HLT_DoubleMu4_Jpsi_displaced_v*")
+Dimuon0_addDTrack_Jpsi.denGenericTriggerEventPSet.l1Algorithms = cms.vstring("L1_DoubleMu4_SQ_OS_dR_Max1p2 OR L1_DoubleMu0er1p5_SQ_OS_dR_Max1p4")
+Dimuon0_addDTrack_Jpsi.muoSelection_ref = cms.string("pt>5 && abs(eta)<2.4 &  isGlobalMuon  & innerTrack.hitPattern.trackerLayersWithMeasurement>5 & innerTrack.hitPattern.numberOfValidPixelHits>0 ")
+Dimuon0_addDTrack_Jpsi.DMSelection_ref = cms.string("abs(Eta)<2.4")
+
+
+Dimuon0_addTrackMu_Phi = hltBPHmonitoring.clone()
+Dimuon0_addTrackMu_Phi.FolderName = cms.string('HLT/BPH/DiMu0_L1_addTrackMu_Phi/')
+Dimuon0_addTrackMu_Phi.tnp = cms.int32(0)
+Dimuon0_addTrackMu_Phi.minmassJpsiTk= cms.double(0.920)
+Dimuon0_addTrackMu_Phi.maxmassJpsiTk= cms.double(1.120)
+Dimuon0_addTrackMu_Phi.nofset = cms.int32(10)
+Dimuon0_addTrackMu_Phi.numGenericTriggerEventPSet.hltPaths = cms.vstring("HLT_Mu20_TkMu0_Phi_v*")
+Dimuon0_addTrackMu_Phi.numGenericTriggerEventPSet.l1Algorithms = cms.vstring("L1_SingleMu18")
+Dimuon0_addTrackMu_Phi.denGenericTriggerEventPSet.hltPaths = cms.vstring("HLT_Mu20_v*")
+Dimuon0_addTrackMu_Phi.denGenericTriggerEventPSet.l1Algorithms = cms.vstring("L1_SingleMu18")
+Dimuon0_addTrackMu_Phi.muoSelection_ref = cms.string("pt>32 && abs(eta)<2.4 &  isGlobalMuon  & innerTrack.hitPattern.trackerLayersWithMeasurement>5 & innerTrack.hitPattern.numberOfValidPixelHits>0 ")
+Dimuon0_addTrackMu_Phi.DMSelection_ref = cms.string("abs(Eta)<2.4")
+
+
+Dimuon0_addTrackMu_Onia = hltBPHmonitoring.clone()
+Dimuon0_addTrackMu_Onia.FolderName = cms.string('HLT/BPH/DiMu0_L1_addTrackMu_Onia/')
+Dimuon0_addTrackMu_Onia.tnp = cms.int32(0)
+Dimuon0_addTrackMu_Onia.minmassJpsiTk= cms.double(3)
+Dimuon0_addTrackMu_Onia.maxmassJpsiTk= cms.double(3.2)
+Dimuon0_addTrackMu_Onia.nofset = cms.int32(10)
+Dimuon0_addTrackMu_Onia.numGenericTriggerEventPSet.hltPaths = cms.vstring("HLT_Mu30_TkMu0_Onia_v*")
+Dimuon0_addTrackMu_Onia.numGenericTriggerEventPSet.l1Algorithms = cms.vstring("L1_SingleMu22 OR L1_SingleMu25")
+Dimuon0_addTrackMu_Onia.denGenericTriggerEventPSet.hltPaths = cms.vstring("HLT_Mu27_v*")
+Dimuon0_addTrackMu_Onia.denGenericTriggerEventPSet.l1Algorithms = cms.vstring("L1_SingleMu22 OR L1_SingleMu25")
+Dimuon0_addTrackMu_Onia.muoSelection_ref = cms.string("pt>32 && abs(eta)<2.4 &  isGlobalMuon  & innerTrack.hitPattern.trackerLayersWithMeasurement>5 & innerTrack.hitPattern.numberOfValidPixelHits>0 ")
+Dimuon0_addTrackMu_Onia.DMSelection_ref = cms.string("abs(Eta)<2.4")
+
+
 ###
 
 bphHLTmonitoring = cms.Sequence(
@@ -601,10 +656,14 @@ bphHLTmonitoring = cms.Sequence(
     + Dimuon0_L3TnP_Jpsi
     + Dimuon0_L3TnP_Upsilon
     + Dimuon0_HLT_OS
+    + Dimuon0_HLT_OS1
     + Dimuon0_looseVtx_Jpsi
     + Dimuon0_looseVtx_Upsilon
     + Dimuon0_tightVtx_Jpsi
     + Dimuon0_addTrack_Jpsi
+    + Dimuon0_addDTrack_Jpsi
+    + Dimuon0_addTrackMu_Onia
+    + Dimuon0_addTrackMu_Phi
 
 )
 

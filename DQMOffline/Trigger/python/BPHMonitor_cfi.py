@@ -79,11 +79,16 @@ hltBPHmonitoring.beamSpot = cms.InputTag("offlineBeamSpot") #
 hltBPHmonitoring.muons     = cms.InputTag("muons") # 
 hltBPHmonitoring.photons     = cms.InputTag("photons") # 
 
+#hltBPHmonitoring.DMSelection_ref = cms.string("")
+#hltBPHmonitoring.muoSelection_ref = cms.string("")
+#hltBPHmonitoring.muoSelection_ = cms.string("")
+
+
 hltBPHmonitoring.numGenericTriggerEventPSet.andOr         = cms.bool( False )
 hltBPHmonitoring.numGenericTriggerEventPSet.dbLabel       = cms.string("BPHDQMTrigger") # it does not exist yet, we should consider the possibility of using the DB, but as it is now it will need a label per path !
 hltBPHmonitoring.numGenericTriggerEventPSet.andOrHlt      = cms.bool(True)# True:=OR; False:=AND
 hltBPHmonitoring.numGenericTriggerEventPSet.andOrL1      = cms.bool(True)# True:=OR; False:=AND
-hltBPHmonitoring.numGenericTriggerEventPSet.hltInputTag   = cms.InputTag( "TriggerResults::HLT" )
+hltBPHmonitoring.numGenericTriggerEventPSet.hltInputTag   = cms.InputTag( "hltTriggerSummaryAOD","","HLT" )
 hltBPHmonitoring.numGenericTriggerEventPSet.hltPaths      = cms.vstring("HLT_Dimuon0_Jpsi_L1_NoOS_v*") # HLT_ZeroBias_v*
 hltBPHmonitoring.numGenericTriggerEventPSet.l1Algorithms      = cms.vstring("L1_DoubleMu0_SQ") # HLT_ZeroBias_v*
 hltBPHmonitoring.numGenericTriggerEventPSet.hltDBKey      = cms.string("diMu10")
