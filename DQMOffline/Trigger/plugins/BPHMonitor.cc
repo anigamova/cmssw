@@ -130,7 +130,7 @@ BPHMonitor::~BPHMonitor()
 {
   if (num_genTriggerEventFlag_) delete num_genTriggerEventFlag_;
   if (den_genTriggerEventFlag_) delete den_genTriggerEventFlag_;
-  delete prescaleWeightProvider_;
+  if (prescaleWeightProvider_)  delete prescaleWeightProvider_;
 }
 
 MEbinning BPHMonitor::getHistoPSet(edm::ParameterSet pset)
@@ -356,6 +356,7 @@ void BPHMonitor::bookHistograms(DQMStore::IBooker     & ibooker,
   // Initialize the GenericTriggerEventFlag
   if ( num_genTriggerEventFlag_ && num_genTriggerEventFlag_->on() ) num_genTriggerEventFlag_->initRun( iRun, iSetup );
   if ( den_genTriggerEventFlag_ && den_genTriggerEventFlag_->on() ) den_genTriggerEventFlag_->initRun( iRun, iSetup );
+  //if (prescaleWeightProvider_ )prescaleWeightProvider_->initRun( iRun, iSetup );
   prescaleWeightProvider_->initRun( iRun, iSetup );
 }
 
@@ -384,13 +385,13 @@ void BPHMonitor::analyze(edm::Event const& iEvent, edm::EventSetup const& iSetup
   edm::Handle<trigger::TriggerEvent> handleTriggerEvent; 
   edm::ESHandle<MagneticField> bFieldHandle;
   // Filter out events if Trigger Filtering is requested
-  double PrescaleWeight = prescaleWeightProvider_->prescaleWeight( iEvent, iSetup );  
-  
   if (tnp_>0) {//TnP method 
     if (den_genTriggerEventFlag_->on() && ! den_genTriggerEventFlag_->accept( iEvent, iSetup) ) return;
+    double PrescaleWeight = 1;
+    if (prescaleWeightProvider_) PrescaleWeight = prescaleWeightProvider_->prescaleWeight( iEvent, iSetup );
     iEvent.getByToken( hltInputTag_, handleTriggerEvent);
     if (handleTriggerEvent->sizeFilters()== 0)return;
-    const std::string & hltpath = hltpaths_num[0]; 
+    const std::string & hltpath = hltpaths_den[0]; 
     std::vector<reco::Muon> tagMuons;
     for ( auto const & m : *muoHandle ) {//applying tag selection 
       if(false && !matchToTrigger(hltpath,m, handleTriggerEvent)) continue;
@@ -404,18 +405,16 @@ void BPHMonitor::analyze(edm::Event const& iEvent, edm::EventSetup const& iSetup
           muPhi_.denominator->Fill(m.phi());
           muEta_.denominator->Fill(m.eta());
           muPt_.denominator ->Fill(m.pt());
-          if (muoSelection_( m )){
+          if (muoSelection_( m ) && num_genTriggerEventFlag_->on() && num_genTriggerEventFlag_->accept( iEvent, iSetup)){
             muPhi_.numerator->Fill(m.phi(),PrescaleWeight);
             muEta_.numerator->Fill(m.eta(),PrescaleWeight);
             muPt_.numerator ->Fill(m.pt(),PrescaleWeight);
           }
         }      
       }
-        
     }
-    
-
   }  
+
   else{//reference method
     if (den_genTriggerEventFlag_->on() && ! den_genTriggerEventFlag_->accept( iEvent, iSetup) ) return;
     iEvent.getByToken( hltInputTag_, handleTriggerEvent);
@@ -788,6 +787,12 @@ void BPHMonitor::analyze(edm::Event const& iEvent, edm::EventSetup const& iSetup
     if (num_genTriggerEventFlag_->on() && ! num_genTriggerEventFlag_->accept( iEvent, iSetup) ) return;
     iEvent.getByToken( hltInputTag_, handleTriggerEvent);
     if (handleTriggerEvent->sizeFilters()== 0)return;
+    double PrescaleWeight = 1;
+    if (prescaleWeightProvider_) {
+      PrescaleWeight = prescaleWeightProvider_->prescaleWeight( iEvent, iSetup );
+      std::cout<<"good PW = " <<PrescaleWeight<<std::endl;
+    }
+    else std::cout<<"bad PW = " <<std::endl;
     const std::string & hltpath1 = hltpaths_num[0]; 
     for (auto const & m : *muoHandle ) {
       if(false && !matchToTrigger(hltpath1,m, handleTriggerEvent)) continue;
