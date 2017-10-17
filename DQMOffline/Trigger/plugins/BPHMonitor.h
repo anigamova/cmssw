@@ -44,7 +44,9 @@
 #include "DataFormats/HLTReco/interface/TriggerObject.h"
 #include "DataFormats/BeamSpot/interface/BeamSpot.h"
 #include "CommonTools/TriggerUtils/interface/PrescaleWeightProvider.h"
-
+#include "DataFormats/L1GlobalTrigger/interface/L1GtTriggerMenuLite.h"
+#include "HLTrigger/HLTcore/interface/HLTConfigProvider.h"
+#include "HLTrigger/HLTcore/interface/HLTPrescaleProvider.h"
 class GenericTriggerEventFlag;
 
 struct MEbinning {
@@ -73,7 +75,6 @@ public:
   static void fillDescriptions(edm::ConfigurationDescriptions & descriptions);
   static void fillHistoPSetDescription(edm::ParameterSetDescription & pset);
   static void fillHistoLSPSetDescription(edm::ParameterSetDescription & pset);
-
 protected:
 
   void bookHistograms(DQMStore::IBooker &, edm::Run const &, edm::EventSetup const &) override;
@@ -159,6 +160,7 @@ private:
   GenericTriggerEventFlag* num_genTriggerEventFlag_;
   GenericTriggerEventFlag* den_genTriggerEventFlag_;
   PrescaleWeightProvider * prescaleWeightProvider_;
+  HLTPrescaleProvider* hltPrescale_;
   StringCutObjectSelector<reco::Muon,true>        muoSelection_;
   StringCutObjectSelector<reco::Muon,true>        muoSelection_ref;
   StringCutObjectSelector<reco::Muon,true>        muoSelection_tag;

@@ -29,6 +29,7 @@ BPHMonitor::BPHMonitor( const edm::ParameterSet& iConfig ) :
   , num_genTriggerEventFlag_(new GenericTriggerEventFlag(iConfig.getParameter<edm::ParameterSet>("numGenericTriggerEventPSet"),consumesCollector(), *this))
   , den_genTriggerEventFlag_(new GenericTriggerEventFlag(iConfig.getParameter<edm::ParameterSet>("denGenericTriggerEventPSet"),consumesCollector(), *this))
   , prescaleWeightProvider_( new PrescaleWeightProvider( iConfig.getParameter<edm::ParameterSet>("PrescaleTriggerEventPSet"),consumesCollector(), *this))
+  , hltPrescale_ (new HLTPrescaleProvider(iConfig, consumesCollector(), *this))
   , muoSelection_ ( iConfig.getParameter<std::string>("muoSelection") )
   , muoSelection_ref ( iConfig.getParameter<std::string>("muoSelection_ref") )
   , muoSelection_tag ( iConfig.getParameter<std::string>("muoSelection_tag") )
@@ -219,6 +220,7 @@ void BPHMonitor::bookHistograms(DQMStore::IBooker     & ibooker,
 				edm::EventSetup const & iSetup) 
 {  
   
+  bool changed(true);
   std::string histname, histtitle, istnp, trMuPh;
   bool Ph_; if (enum_==7) Ph_ = true;
   if (tnp_) istnp = "Tag_and_Probe/"; else istnp = "";
@@ -358,6 +360,18 @@ void BPHMonitor::bookHistograms(DQMStore::IBooker     & ibooker,
   if ( den_genTriggerEventFlag_ && den_genTriggerEventFlag_->on() ) den_genTriggerEventFlag_->initRun( iRun, iSetup );
   //if (prescaleWeightProvider_ )prescaleWeightProvider_->initRun( iRun, iSetup );
   prescaleWeightProvider_->initRun( iRun, iSetup );
+  changed = false;
+  if(!hltPrescale_->init(iRun,iSetup,"HLT",changed) )
+  {
+//    std::cout<<"checking prescale1"<<std::endl;
+//    edm::LogError("TriggerMatchProducer") <<"Error! Can't initialize HLTConfigProvider";
+    return; 
+//    throw cms::Exception("HLTConfigProvider::init() returned non 0");
+  }
+//    std::cout<<"checking prescale2"<<std::endl;
+
+
+
 }
 
 #include "FWCore/Framework/interface/ESHandle.h"
@@ -787,13 +801,24 @@ void BPHMonitor::analyze(edm::Event const& iEvent, edm::EventSetup const& iSetup
     if (num_genTriggerEventFlag_->on() && ! num_genTriggerEventFlag_->accept( iEvent, iSetup) ) return;
     iEvent.getByToken( hltInputTag_, handleTriggerEvent);
     if (handleTriggerEvent->sizeFilters()== 0)return;
-    double PrescaleWeight = 1;
-    if (prescaleWeightProvider_) {
-      PrescaleWeight = prescaleWeightProvider_->prescaleWeight( iEvent, iSetup );
-      std::cout<<"good PW = " <<PrescaleWeight<<std::endl;
-    }
-    else std::cout<<"bad PW = " <<std::endl;
-    const std::string & hltpath1 = hltpaths_num[0]; 
+    int PrescaleWeight = 1;
+    std::string hltpath1 = hltpaths_num[0]; 
+    std::cout<<hltpath1<<std::endl;
+//    std::pair<int,int> PrescaleValues =  hltPrescale_->prescaleValues(iEvent, iSetup, hltpaths_num[0]);
+//    int PrescaleValues =  hltPrescale_->prescaleValue(iEvent, iSetup, hltpath1);
+`   int  PrescleHLT=1, PrescleHLT1=1;
+    int PrescleL1 = 1;
+    PrescleHLT1 =  hltPrescale_->prescaleValue(iEvent, iSetup, hltpath1);//working !!! 
+//     PrescleL1 = PrescaleValues.first;
+//     PrescleL1 = ((hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).first)[0].second;
+    PrescleL1 = (hltPrescale_->prescaleValues(iEvent, iSetup, hltpath1)).first;// 
+//     PrescleHLT = PrescaleValues.second;
+    PrescleHLT = (hltPrescale_->prescaleValues(iEvent, iSetup, hltpath1)).second;
+//     PrescleHLT = (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).second;
+     if (PrescleHLT>1)std::cout<<"L1 = "<< PrescleL1<<"HLT = "<< PrescleHLT <<std::endl;
+     PrescaleWeight = PrescleL1 * PrescleHLT;
+//    }
+//    else PrescaleWeight = 1;
     for (auto const & m : *muoHandle ) {
       if(false && !matchToTrigger(hltpath1,m, handleTriggerEvent)) continue;
       if(!muoSelection_ref(m))continue;   
