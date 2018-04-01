@@ -44,6 +44,8 @@
 #include "DataFormats/HLTReco/interface/TriggerObject.h"
 #include "DataFormats/BeamSpot/interface/BeamSpot.h"
 #include "CommonTools/TriggerUtils/interface/PrescaleWeightProvider.h"
+#include "HLTrigger/HLTcore/interface/HLTConfigProvider.h"
+#include "HLTrigger/HLTcore/interface/HLTPrescaleProvider.h"
 
 class GenericTriggerEventFlag;
 
@@ -161,7 +163,8 @@ private:
 
   GenericTriggerEventFlag* num_genTriggerEventFlag_;
   GenericTriggerEventFlag* den_genTriggerEventFlag_;
-  PrescaleWeightProvider * prescaleWeightProvider_;
+//  PrescaleWeightProvider * prescaleWeightProvider_;
+  HLTPrescaleProvider* hltPrescale_;
   StringCutObjectSelector<reco::Muon,true>        muoSelection_;
   StringCutObjectSelector<reco::Muon,true>        muoSelection_ref;
   StringCutObjectSelector<reco::Muon,true>        muoSelection_tag;
@@ -198,7 +201,8 @@ private:
   StringCutObjectSelector<reco::Track,true>        trSelection_;
   StringCutObjectSelector<reco::Track,true>        trSelection_ref;
   StringCutObjectSelector<reco::Candidate::LorentzVector,true>        DMSelection_ref;
-
+  HLTConfigProvider hltConfig_;
+  std::string getTriggerName(std::string partialName);
 };
 
 #endif // METMONITOR_H

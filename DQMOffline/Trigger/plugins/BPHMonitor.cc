@@ -28,7 +28,7 @@ BPHMonitor::BPHMonitor( const edm::ParameterSet& iConfig ) :
   , prob_binning_ ( getHistoPSet (iConfig.getParameter<edm::ParameterSet>("histoPSet").getParameter<edm::ParameterSet> ("probPSet") ) )
   , num_genTriggerEventFlag_(new GenericTriggerEventFlag(iConfig.getParameter<edm::ParameterSet>("numGenericTriggerEventPSet"),consumesCollector(), *this))
   , den_genTriggerEventFlag_(new GenericTriggerEventFlag(iConfig.getParameter<edm::ParameterSet>("denGenericTriggerEventPSet"),consumesCollector(), *this))
-  , prescaleWeightProvider_( new PrescaleWeightProvider( iConfig.getParameter<edm::ParameterSet>("PrescaleTriggerEventPSet"),consumesCollector(), *this))
+  , hltPrescale_ (new HLTPrescaleProvider(iConfig, consumesCollector(), *this))
   , muoSelection_ ( iConfig.getParameter<std::string>("muoSelection") )
   , muoSelection_ref ( iConfig.getParameter<std::string>("muoSelection_ref") )
   , muoSelection_tag ( iConfig.getParameter<std::string>("muoSelection_tag") )
@@ -132,7 +132,7 @@ BPHMonitor::~BPHMonitor()
 {
   if (num_genTriggerEventFlag_) delete num_genTriggerEventFlag_;
   if (den_genTriggerEventFlag_) delete den_genTriggerEventFlag_;
-  delete prescaleWeightProvider_;
+  delete hltPrescale_;
 }
 
 MEbinning BPHMonitor::getHistoPSet(edm::ParameterSet pset)
@@ -336,7 +336,16 @@ void BPHMonitor::bookHistograms(DQMStore::IBooker     & ibooker,
   // Initialize the GenericTriggerEventFlag
   if ( num_genTriggerEventFlag_ && num_genTriggerEventFlag_->on() ) num_genTriggerEventFlag_->initRun( iRun, iSetup );
   if ( den_genTriggerEventFlag_ && den_genTriggerEventFlag_->on() ) den_genTriggerEventFlag_->initRun( iRun, iSetup );
-  prescaleWeightProvider_->initRun( iRun, iSetup );
+  bool changed = true;
+
+  if(!hltPrescale_->init(iRun,iSetup,"HLT",changed) )
+  {
+    // std::cout<<"prescale module init failed"<<std::endl;
+    // return;
+  }
+  // else std::cout<<"prescale module init succeded"<<std::endl;
+
+  hltConfig_ = hltPrescale_->hltConfigProvider();
 }
 
 #include "FWCore/Framework/interface/ESHandle.h"
@@ -364,13 +373,48 @@ void BPHMonitor::analyze(edm::Event const& iEvent, edm::EventSetup const& iSetup
   edm::Handle<trigger::TriggerEvent> handleTriggerEvent; 
   edm::ESHandle<MagneticField> bFieldHandle;
   // Filter out events if Trigger Filtering is requested
-  double PrescaleWeight = prescaleWeightProvider_->prescaleWeight( iEvent, iSetup );  
-  
-  if (tnp_> 0) { // TnP method 
+  //
+  double PrescaleWeight =1;
+  // int PrescaleSet = hltPrescale_->prescaleSet(iEvent, iSetup);
+  const std::string & hltpath = getTriggerName(hltpaths_den[0]);
+  const std::string & hltpath1 =getTriggerName(hltpaths_num[0]);
+
+  if (den_genTriggerEventFlag_->on() &&  den_genTriggerEventFlag_->accept( iEvent, iSetup) && num_genTriggerEventFlag_->on() &&  num_genTriggerEventFlag_->accept( iEvent, iSetup) ) {
+    int PrescaleHLT = 1;
+    int PrescaleHLT_den = 1;
+    int PrescaleL1 = 1;
+
+    // when the L1 logic for numerator and denominator are prescaled, the L1 prescale contributes to the weight
+    if ( (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).first.at(0).second > 1 && (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath)).first.at(0).first != (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).first.at(0).first ) {
+      // global prescale combines all the seeds composing the L1 logic
+      for (size_t iSeed=0; iSeed < (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).first.size(); ++iSeed) {
+	PrescaleL1 *= 1 - ( 1.0 / (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).first.at(0).second );
+      }
+      PrescaleL1 = 1.0 / ( 1 - PrescaleL1 );
+    }
+
+    PrescaleHLT = (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).second;
+    PrescaleHLT_den = (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath)).second;
+
+    // when HLT PS are equal or exact multiples, they "synchronize" the acceptance and the relative prescale of the numerator is reduced
+    if ( PrescaleHLT_den % PrescaleHLT == 0 ) PrescaleHLT = 1;
+    else if ( PrescaleHLT % PrescaleHLT_den == 0 ) PrescaleHLT = PrescaleHLT / PrescaleHLT_den;
+
+    PrescaleWeight = PrescaleL1*PrescaleHLT;
+
+    // std::cout<<"total L1 prescale = "<<PrescaleL1<<std::endl;
+    // std::cout<<"total HLT prescale = "<<PrescaleHLT<<std::endl;
+    // std::cout<<"total prescale = "<<PrescaleWeight<<std::endl;
+
+  }
+
+  //  //std::cout<<"L1 = "<< PrescleL1<<"HLT = "<< PrescleHLT<<"HLT1"<<PrescleHLT1 <<std::endl;
+  //  std::cout<<"PrescaleSet = "<<PrescaleSet<<std::endl;
+  //  std::cout<<"hltnum = "<<hltpath1<<std::endl;
+  if (tnp_>0) {//TnP method 
     if (den_genTriggerEventFlag_->on() && ! den_genTriggerEventFlag_->accept( iEvent, iSetup) ) return;
     iEvent.getByToken( hltInputTag_, handleTriggerEvent);
     if (handleTriggerEvent->sizeFilters()== 0) return;
-    const std::string & hltpath = hltpaths_num[0]; 
     std::vector<reco::Muon> tagMuons;
     for ( auto const & m : *muoHandle ) { // applying tag selection 
       if (false && !matchToTrigger(hltpath,m, handleTriggerEvent)) continue;
@@ -378,18 +422,18 @@ void BPHMonitor::analyze(edm::Event const& iEvent, edm::EventSetup const& iSetup
     }
     for (int i = 0; i<int(tagMuons.size());i++) {
       for ( auto const & m : *muoHandle ) { 
-	if (false && !matchToTrigger(hltpath,m, handleTriggerEvent)) continue;
-	if ((tagMuons[i].pt() == m.pt())) continue; // not the same  
-	if ((tagMuons[i].p4()+m.p4()).M() >minmass_&& (tagMuons[i].p4()+m.p4()).M() <maxmass_) { // near to J/psi mass
-	  muPhi_.denominator->Fill(m.phi());
-	  muEta_.denominator->Fill(m.eta());
-	  muPt_.denominator ->Fill(m.pt());
-	  if (muoSelection_( m )) {
-	    muPhi_.numerator->Fill(m.phi(),PrescaleWeight);
-	    muEta_.numerator->Fill(m.eta(),PrescaleWeight);
-	    muPt_.numerator ->Fill(m.pt(),PrescaleWeight);
-	  }
-	} 
+        if (false && !matchToTrigger(hltpath,m, handleTriggerEvent)) continue;
+        if ((tagMuons[i].pt() == m.pt())) continue; //not the same  
+        if ((tagMuons[i].p4()+m.p4()).M() >minmass_&& (tagMuons[i].p4()+m.p4()).M() <maxmass_) { //near to J/psi mass
+          muPhi_.denominator->Fill(m.phi());
+          muEta_.denominator->Fill(m.eta());
+          muPt_.denominator ->Fill(m.pt());
+          if (muoSelection_( m ) && num_genTriggerEventFlag_->on() && num_genTriggerEventFlag_->accept( iEvent, iSetup)) {
+            muPhi_.numerator->Fill(m.phi(),PrescaleWeight);
+            muEta_.numerator->Fill(m.eta(),PrescaleWeight);
+            muPt_.numerator ->Fill(m.pt(),PrescaleWeight);
+          }
+        }      
       }
  
     }
@@ -400,7 +444,6 @@ void BPHMonitor::analyze(edm::Event const& iEvent, edm::EventSetup const& iSetup
     if (den_genTriggerEventFlag_->on() && ! den_genTriggerEventFlag_->accept( iEvent, iSetup) ) return;
     iEvent.getByToken( hltInputTag_, handleTriggerEvent);
     if (handleTriggerEvent->sizeFilters()== 0) return;
-    const std::string & hltpath = hltpaths_den[0]; 
     for (auto const & m : *muoHandle ) {
       if (false && !matchToTrigger(hltpath,m, handleTriggerEvent)) continue;
       if (!muoSelection_ref(m)) continue; 
@@ -435,551 +478,598 @@ void BPHMonitor::analyze(edm::Event const& iEvent, edm::EventSetup const& iSetup
 	GlobalPoint displacementFromBeamspotJpsi( -1*((vertexBeamSpot.x0() - jVertex.x()) + (jVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dxdz()),
 						  -1*((vertexBeamSpot.y0() - jVertex.y()) + (jVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dydz()),
 						  0);
-	reco::Vertex::Point vperpj(displacementFromBeamspotJpsi.x(), displacementFromBeamspotJpsi.y(), 0.);
-	float jpsi_cos = vperpj.Dot(jpperp) / (vperpj.R()*jpperp.R());
-	TrajectoryStateClosestToPoint mu1TS = mu1TT.impactPointTSCP();
-	TrajectoryStateClosestToPoint mu2TS = mu2TT.impactPointTSCP();
-	ClosestApproachInRPhi cApp;
-	if (mu1TS.isValid() && mu2TS.isValid()) {
-	  cApp.calculate(mu1TS.theState(), mu2TS.theState());
-	}
-	double DiMuMass = (m1.p4()+m.p4()).M();
-	switch(enum_) { // enum_ = 1...9, represents different sets of variables for different paths, we want to have different hists for different paths
-	case 1: tnp_=true; // already filled hists for tnp method
-	case 2:
-	  if ((Jpsi_) && (!Upsilon_)) {
-	    if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
-	  }
-	  if ((!Jpsi_) && (Upsilon_)) {
-	    if (DiMuMass> maxmassUpsilon || DiMuMass< minmassUpsilon) continue;
-	  }
-	  if (dimuonCL < minprob) continue;
-	  mu1Phi_.denominator->Fill(m.phi());
-	  mu1Eta_.denominator->Fill(m.eta());
-	  mu1Pt_.denominator ->Fill(m.pt());
-	  mu2Phi_.denominator->Fill(m1.phi());
-	  mu2Eta_.denominator->Fill(m1.eta());
-	  mu2Pt_.denominator ->Fill(m1.pt());
-	  DiMuPt_.denominator ->Fill((m1.p4()+m.p4()).Pt() );
-	  DiMuEta_.denominator ->Fill((m1.p4()+m.p4()).Eta() );
-	  DiMuPhi_.denominator ->Fill((m1.p4()+m.p4()).Phi());
-	  break;
-	case 3:
-	  if ((Jpsi_) && (!Upsilon_)) {
-	    if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
-	  }
-	  if ((!Jpsi_) && (Upsilon_)) {
-	    if (DiMuMass> maxmassUpsilon || DiMuMass< minmassUpsilon) continue;
-	  }
-	  if (dimuonCL < minprob) continue;
-	  mu1Eta_.denominator->Fill(m.eta());
-	  mu1Pt_.denominator ->Fill(m.pt());
-	  mu2Eta_.denominator->Fill(m1.eta());
-	  mu2Pt_.denominator ->Fill(m1.pt());
-	  break; 
-	case 4:
-	  if (dimuonCL < minprob) continue;
-	  DiMuMass_.denominator ->Fill(DiMuMass);
-	  if ((Jpsi_) && (!Upsilon_)) {
-	    if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
-	  }
-	  if ((!Jpsi_) && (Upsilon_)) {
-	    if (DiMuMass> maxmassUpsilon || DiMuMass< minmassUpsilon) continue;
-	  }
-	  mu1Phi_.denominator->Fill(m.phi());
-	  mu1Eta_.denominator->Fill(m.eta());
-	  mu1Pt_.denominator ->Fill(m.pt());
-	  mu2Phi_.denominator->Fill(m1.phi());
-	  mu2Eta_.denominator->Fill(m1.eta());
-	  mu2Pt_.denominator ->Fill(m1.pt());
-	  DiMuPt_.denominator ->Fill((m1.p4()+m.p4()).Pt() );
-	  DiMuEta_.denominator ->Fill((m1.p4()+m.p4()).Eta() );
-	  DiMuPhi_.denominator ->Fill((m1.p4()+m.p4()).Phi());
-	  DiMudR_.denominator ->Fill(reco::deltaR(m,m1));
-	  break;
-	case 5:
-	  if (dimuonCL < minprob) continue;
-	  if ((Jpsi_) && (!Upsilon_)) {
-	    if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
-	  }
+        reco::Vertex::Point vperpj(displacementFromBeamspotJpsi.x(), displacementFromBeamspotJpsi.y(), 0.);
+        float jpsi_cos = vperpj.Dot(jpperp) / (vperpj.R()*jpperp.R());
+        TrajectoryStateClosestToPoint mu1TS = mu1TT.impactPointTSCP();
+        TrajectoryStateClosestToPoint mu2TS = mu2TT.impactPointTSCP();
+        ClosestApproachInRPhi cApp;
+        if (mu1TS.isValid() && mu2TS.isValid()) {
+          cApp.calculate(mu1TS.theState(), mu2TS.theState());
+        }
+        double DiMuMass = (m1.p4()+m.p4()).M();
+        switch(enum_) { // enum_ = 1...9, represents different sets of variables for different paths, we want to have different hists for different paths
+
+        case 1: tnp_=true; // already filled hists for tnp method
+
+        case 2:
+          if ((Jpsi_) && (!Upsilon_)) {
+            if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
+          }
+          if ((!Jpsi_) && (Upsilon_)) {
+            if (DiMuMass> maxmassUpsilon || DiMuMass< minmassUpsilon) continue;
+          }
+          if (dimuonCL < minprob) continue;
+          mu1Phi_.denominator->Fill(m.phi());
+          mu1Eta_.denominator->Fill(m.eta());
+          mu1Pt_.denominator ->Fill(m.pt());
+          mu2Phi_.denominator->Fill(m1.phi());
+          mu2Eta_.denominator->Fill(m1.eta());
+          mu2Pt_.denominator ->Fill(m1.pt());
+          DiMuPt_.denominator ->Fill((m1.p4()+m.p4()).Pt() );
+          DiMuEta_.denominator ->Fill((m1.p4()+m.p4()).Eta() );
+          DiMuPhi_.denominator ->Fill((m1.p4()+m.p4()).Phi());
+          if (num_genTriggerEventFlag_->on() &&  num_genTriggerEventFlag_->accept( iEvent, iSetup) )
+	    {
+	      //const std::string const std::string & hltpath1 hltpath1 = hltpaths_num[0];
+	      //int PrescleHLT=1, PrescleHLT1=1;
+	      //int PrescleL1 = 1;
+	      //PrescleHLT =  hltPrescale_->prescaleValue(iEvent, iSetup, hltpath1);//working !!!
+	      //std::cout<<"L1 = "<< PrescleL1<<"HLT = "<< PrescleHLT<<"HLT1"<<PrescleHLT1 <<std::endl;
+	      //PrescleL1 = (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).first.at(0).second;//
+	      //PrescleHLT= (hltPrescale_->prescaleValues(iEvent, iSetup, hltpath1)).second;
+	      //            
+	      //std::cout<<"L1 = "<< PrescleL1<<"HLT = "<< PrescleHLT<<"HLT1"<<PrescleHLT1 <<std::endl;
+	      ///PrescaleWeight = PrescleL1 * PrescleHLT;
+
+	      if(false && !matchToTrigger(hltpath1,m1, handleTriggerEvent)) continue;
+	      if(false && !matchToTrigger(hltpath1,m, handleTriggerEvent)) continue;
+	      mu1Phi_.numerator->Fill(m.phi(),PrescaleWeight);
+	      mu1Eta_.numerator->Fill(m.eta(),PrescaleWeight);
+	      mu1Pt_.numerator ->Fill(m.pt(),PrescaleWeight);
+	      mu2Phi_.numerator->Fill(m1.phi(),PrescaleWeight);
+	      mu2Eta_.numerator->Fill(m1.eta(),PrescaleWeight);
+	      mu2Pt_.numerator ->Fill(m1.pt(),PrescaleWeight);
+	      DiMuPt_.numerator ->Fill((m1.p4()+m.p4()).Pt() ,PrescaleWeight);
+	      DiMuEta_.numerator ->Fill((m1.p4()+m.p4()).Eta() ,PrescaleWeight);
+	      DiMuPhi_.numerator ->Fill((m1.p4()+m.p4()).Phi(),PrescaleWeight);
+	    }
+          break;
+
+        case 3:
+          if ((Jpsi_) && (!Upsilon_)){
+            if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
+          }
+          if ((!Jpsi_) && (Upsilon_)){
+            if (DiMuMass> maxmassUpsilon || DiMuMass< minmassUpsilon) continue;
+          }
+          if (dimuonCL<minprob) continue;
+          mu1Eta_.denominator->Fill(m.eta());
+          mu1Pt_.denominator ->Fill(m.pt());
+          mu2Eta_.denominator->Fill(m1.eta());
+          mu2Pt_.denominator ->Fill(m1.pt());
+          if (num_genTriggerEventFlag_->on() &&  num_genTriggerEventFlag_->accept( iEvent, iSetup) )
+	    {
+	      //std::cout<<"inside num"<<enum_<<std::endl;
+	      //const std::string const std::string & hltpath1 hltpath1 = hltpaths_num[0];
+	      //int PrescleHLT=1, PrescleHLT1=1;
+	      //int PrescleL1 = 1;
+	      //PrescleHLT =  hltPrescale_->prescaleValue(iEvent, iSetup, hltpath1);//working !!!
+	      //PrescleL1 = (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).first.at(0).second;//
+	      //PrescleHLT= (hltPrescale_->prescaleValues(iEvent, iSetup, hltpath1)).second;
+	      //std::cout<<"L1 = "<< PrescleL1<<"HLT = "<< PrescleHLT<<"HLT1"<<PrescleHLT1 <<std::endl;
+	      ///PrescaleWeight = PrescleL1 * PrescleHLT;
+	      if(false && !matchToTrigger(hltpath1,m1, handleTriggerEvent)) continue;
+	      if(false && !matchToTrigger(hltpath1,m, handleTriggerEvent)) continue;
+	      mu1Eta_.numerator->Fill(m.eta(),PrescaleWeight);
+	      mu1Pt_.numerator ->Fill(m.pt(),PrescaleWeight);
+	      mu2Eta_.numerator->Fill(m1.eta(),PrescaleWeight);
+	      mu2Pt_.numerator ->Fill(m1.pt(),PrescaleWeight);
+	    }
+          break; 
+
+        case 4:
+          if (dimuonCL<minprob) continue;
+          DiMuMass_.denominator ->Fill(DiMuMass);
+          if (num_genTriggerEventFlag_->on() &&  num_genTriggerEventFlag_->accept( iEvent, iSetup) && muoSelection_ref(m1))
+	    {
+	      //std::cout<<"inside num"<<enum_<<std::endl;
+	      //const std::string const std::string & hltpath1 hltpath1 = hltpaths_num[0];
+	      //int PrescleHLT=1, PrescleHLT1=1;
+	      //int PrescleL1 = 1;
+	      //PrescleHLT =  hltPrescale_->prescaleValue(iEvent, iSetup, hltpath1);//working !!!
+	      //PrescleL1 = (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).first.at(0).second;//
+	      //PrescleHLT= (hltPrescale_->prescaleValues(iEvent, iSetup, hltpath1)).second;
+	      //std::cout<<"L1 = "<< PrescleL1<<"HLT = "<< PrescleHLT<<"HLT1"<<PrescleHLT1 <<std::endl;
+	      ///PrescaleWeight = PrescleL1 * PrescleHLT;
+	      if (seagull_ && ((m.charge()* deltaPhi(m.phi(), m1.phi())) > 0.) ) continue;
+	      if(false && !matchToTrigger(hltpath1,m1, handleTriggerEvent)) continue;          
+	      if(false && !matchToTrigger(hltpath1,m, handleTriggerEvent)) continue;          
+	      DiMuMass_.numerator ->Fill(DiMuMass);      
+	    }
+          if ((Jpsi_) && (!Upsilon_)){
+            if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
+          }
+          if ((!Jpsi_) && (Upsilon_)){
+            if (DiMuMass> maxmassUpsilon || DiMuMass< minmassUpsilon) continue;
+          }
+          mu1Phi_.denominator->Fill(m.phi());
+          mu1Eta_.denominator->Fill(m.eta());
+          mu1Pt_.denominator ->Fill(m.pt());
+          mu2Phi_.denominator->Fill(m1.phi());
+          mu2Eta_.denominator->Fill(m1.eta());
+          mu2Pt_.denominator ->Fill(m1.pt());
+          DiMuPt_.denominator ->Fill((m1.p4()+m.p4()).Pt() );
+          DiMuEta_.denominator ->Fill((m1.p4()+m.p4()).Eta() );
+          DiMuPhi_.denominator ->Fill((m1.p4()+m.p4()).Phi());
+          DiMudR_.denominator ->Fill(reco::deltaR(m,m1));
+          if (num_genTriggerEventFlag_->on() &&  num_genTriggerEventFlag_->accept( iEvent, iSetup) )
+	    {
+	      //std::cout<<"inside num"<<enum_<<std::endl;
+	      //const std::string const std::string & hltpath1 hltpath1 = hltpaths_num[0];
+	      //int PrescleHLT=1, PrescleHLT1=1;
+	      //int PrescleL1 = 1;
+	      //PrescleHLT =  hltPrescale_->prescaleValue(iEvent, iSetup, hltpath1);//working !!!
+	      //PrescleL1 = (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).first.at(0).second;//
+	      //PrescleHLT= (hltPrescale_->prescaleValues(iEvent, iSetup, hltpath1)).second;
+	      //std::cout<<"L1 = "<< PrescleL1<<"HLT = "<< PrescleHLT<<"HLT1"<<PrescleHLT1 <<std::endl;
+	      ///PrescaleWeight = PrescleL1 * PrescleHLT;
+	      if (seagull_ && ((m.charge()* deltaPhi(m.phi(), m1.phi())) > 0.) ) continue;
+	      if(false && !matchToTrigger(hltpath1,m1, handleTriggerEvent)) continue;
+	      if(false && !matchToTrigger(hltpath1,m, handleTriggerEvent)) continue;
+	      mu1Phi_.numerator->Fill(m.phi(),PrescaleWeight);
+	      mu1Eta_.numerator->Fill(m.eta(),PrescaleWeight);
+	      mu1Pt_.numerator ->Fill(m.pt(),PrescaleWeight);
+	      mu2Phi_.numerator->Fill(m1.phi(),PrescaleWeight);
+	      mu2Eta_.numerator->Fill(m1.eta(),PrescaleWeight);
+	      mu2Pt_.numerator ->Fill(m1.pt(),PrescaleWeight);
+	      DiMuPt_.numerator ->Fill((m1.p4()+m.p4()).Pt() ,PrescaleWeight);
+	      DiMuEta_.numerator ->Fill((m1.p4()+m.p4()).Eta() ,PrescaleWeight);
+	      DiMuPhi_.numerator ->Fill((m1.p4()+m.p4()).Phi(),PrescaleWeight);
+	      DiMudR_.numerator ->Fill(reco::deltaR(m,m1),PrescaleWeight);
+	    }
+          break;
+
+        case 5:
+          if (dimuonCL<minprob) continue;
+          if ((Jpsi_) && (!Upsilon_)){
+            if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
+          }
+  
+          if ((!Jpsi_) && (Upsilon_)){
+            if (DiMuMass> maxmassUpsilon || DiMuMass< minmassUpsilon) continue;
+          }
+          mu1Phi_.denominator->Fill(m.phi());
+          mu1Eta_.denominator->Fill(m.eta());
+          mu1Pt_.denominator ->Fill(m.pt());
+          mu2Phi_.denominator->Fill(m1.phi());
+          mu2Eta_.denominator->Fill(m1.eta());
+          mu2Pt_.denominator ->Fill(m1.pt());
+          DiMuPt_.denominator ->Fill((m1.p4()+m.p4()).Pt() );
+          DiMuEta_.denominator ->Fill((m1.p4()+m.p4()).Eta() );
+          DiMuPhi_.denominator ->Fill((m1.p4()+m.p4()).Phi());
+          DiMudR_.denominator ->Fill(reco::deltaR(m,m1));
+          if (num_genTriggerEventFlag_->on() &&  num_genTriggerEventFlag_->accept( iEvent, iSetup) )
+	    {
+	      //std::cout<<"inside num"<<enum_<<std::endl;
+	      //const std::string const std::string & hltpath1 hltpath1 = hltpaths_num[0];
+	      //int PrescleHLT=1, PrescleHLT1=1;
+	      //int PrescleL1 = 1;
+	      //PrescleHLT =  hltPrescale_->prescaleValue(iEvent, iSetup, hltpath1);//working !!!
+	      //PrescleL1 = (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).first.at(0).second;//
+	      //PrescleHLT= (hltPrescale_->prescaleValues(iEvent, iSetup, hltpath1)).second;
+	      //std::cout<<"L1 = "<< PrescleL1<<"HLT = "<< PrescleHLT<<"HLT1"<<PrescleHLT1 <<std::endl;
+	      ///PrescaleWeight = PrescleL1 * PrescleHLT;
+	      if (seagull_ && ((m.charge()* deltaPhi(m.phi(), m1.phi())) > 0.) ) continue;
+	      if(false && !matchToTrigger(hltpath1,m1, handleTriggerEvent)) continue;
+	      if(false && !matchToTrigger(hltpath1,m, handleTriggerEvent)) continue;
+	      mu1Phi_.numerator->Fill(m.phi(),PrescaleWeight);
+	      mu1Eta_.numerator->Fill(m.eta(),PrescaleWeight);
+	      mu1Pt_.numerator ->Fill(m.pt(),PrescaleWeight);
+	      mu2Phi_.numerator->Fill(m1.phi(),PrescaleWeight);
+	      mu2Eta_.numerator->Fill(m1.eta(),PrescaleWeight);
+	      mu2Pt_.numerator ->Fill(m1.pt(),PrescaleWeight);
+	      DiMuPt_.numerator ->Fill((m1.p4()+m.p4()).Pt() ,PrescaleWeight);
+	      DiMuEta_.numerator ->Fill((m1.p4()+m.p4()).Eta() ,PrescaleWeight);
+	      DiMuPhi_.numerator ->Fill((m1.p4()+m.p4()).Phi(),PrescaleWeight);
+	      DiMudR_.numerator ->Fill(reco::deltaR(m,m1),PrescaleWeight);
+	    }      
+
+          break;
+
+        case 6: 
+          if (dimuonCL<minprob) continue;
+          if ((Jpsi_) && (!Upsilon_)){
+            if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
+          }
+          if ((!Jpsi_) && (Upsilon_)){
+            if (DiMuMass> maxmassUpsilon || DiMuMass< minmassUpsilon) continue;
+          }
+          for (auto const & m2 : *muoHandle) {//triple muon paths
+            if(false && !matchToTrigger(hltpath,m2, handleTriggerEvent)) continue;
+            if (m2.pt() == m.pt()) continue;
+            mu1Phi_.denominator->Fill(m.phi());
+            mu1Eta_.denominator->Fill(m.eta());
+            mu1Pt_.denominator ->Fill(m.pt());
+            mu2Phi_.denominator->Fill(m1.phi());
+            mu2Eta_.denominator->Fill(m1.eta());
+            mu2Pt_.denominator ->Fill(m1.pt());
+            mu3Phi_.denominator->Fill(m2.phi());
+            mu3Eta_.denominator->Fill(m2.eta());
+            mu3Pt_.denominator ->Fill(m2.pt());
+            if (num_genTriggerEventFlag_->on() &&  num_genTriggerEventFlag_->accept( iEvent, iSetup) )
+	      {
+		//std::cout<<"inside num"<<enum_<<std::endl;
+		//const std::string const std::string & hltpath1 hltpath1 = hltpaths_num[0];
+		//int PrescleHLT=1, PrescleHLT1=1;
+		//int PrescleL1 = 1;
+		//PrescleHLT =  hltPrescale_->prescaleValue(iEvent, iSetup, hltpath1);//working !!!
+		//PrescleL1 = (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).first.at(0).second;//
+		//PrescleHLT= (hltPrescale_->prescaleValues(iEvent, iSetup, hltpath1)).second;
+		//std::cout<<"L1 = "<< PrescleL1<<"HLT = "<< PrescleHLT<<"HLT1"<<PrescleHLT1 <<std::endl;
+		///PrescaleWeight = PrescleL1 * PrescleHLT;
+		if(false && !matchToTrigger(hltpath1,m1, handleTriggerEvent)) continue;
+		if(false && !matchToTrigger(hltpath1,m, handleTriggerEvent)) continue;
+		if(false && !matchToTrigger(hltpath1,m2, handleTriggerEvent)) continue;
+		mu1Phi_.numerator->Fill(m.phi(),PrescaleWeight);
+		mu1Eta_.numerator->Fill(m.eta(),PrescaleWeight);
+		mu1Pt_.numerator ->Fill(m.pt(),PrescaleWeight);
+		mu2Phi_.numerator->Fill(m1.phi(),PrescaleWeight);
+		mu2Eta_.numerator->Fill(m1.eta(),PrescaleWeight);
+		mu2Pt_.numerator ->Fill(m1.pt(),PrescaleWeight);
+		mu3Phi_.numerator->Fill(m2.phi(),PrescaleWeight);
+		mu3Eta_.numerator->Fill(m2.eta(),PrescaleWeight);
+		mu3Pt_.numerator ->Fill(m2.pt(),PrescaleWeight);
+
+	      }
+          }      
+          break;    
+  
+        case 7:// the hists for photon monitoring will be filled on 515 line
+          if(phHandle->size()>0)
+	    { 
+	      for (auto const & p : *phHandle)
+		{
+		  if(false && !matchToTrigger(hltpath,p, handleTriggerEvent)) continue;
+		  phPhi_.denominator->Fill(p.phi());
+		  phEta_.denominator->Fill(p.eta());
+		  phPt_.denominator ->Fill(p.pt());
+		  if (num_genTriggerEventFlag_->on() &&  num_genTriggerEventFlag_->accept( iEvent, iSetup) )
+		    {
+		      //std::cout<<"inside num"<<enum_<<std::endl;
+		      //const std::string const std::string & hltpath1 hltpath1 = hltpaths_num[0];
+		      //int PrescleHLT=1, PrescleHLT1=1;
+		      //int PrescleL1 = 1;
+		      //PrescleHLT =  hltPrescale_->prescaleValue(iEvent, iSetup, hltpath1);//working !!!
+		      //PrescleL1 = (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).first.at(0).second;//
+		      //PrescleHLT= (hltPrescale_->prescaleValues(iEvent, iSetup, hltpath1)).second;
+		      //std::cout<<"L1 = "<< PrescleL1<<"HLT = "<< PrescleHLT<<"HLT1"<<PrescleHLT1 <<std::endl;
+		      ///PrescaleWeight = PrescleL1 * PrescleHLT;
+
+		      if(false && !matchToTrigger(hltpath1,p, handleTriggerEvent)) continue;
+		      if(false && !matchToTrigger(hltpath1,m, handleTriggerEvent)) continue;
+		      if(false && !matchToTrigger(hltpath1,m1, handleTriggerEvent)) continue;
+		      phPhi_.numerator->Fill(p.phi(),PrescaleWeight);
+		      phEta_.numerator->Fill(p.eta(),PrescaleWeight);
+		      phPt_.numerator ->Fill(p.pt(),PrescaleWeight);
+
+		    }
+		}
+	    } 
+          break;
+          
+        case 8://vtx monitoring, filling probability, DS, DCA, cos of pointing angle to the PV, eta, pT of dimuon
+          if ((Jpsi_) && (!Upsilon_)){
+            if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
+          }
   
 	  if ((!Jpsi_) && (Upsilon_)) {
 	    if (DiMuMass> maxmassUpsilon || DiMuMass< minmassUpsilon) continue;
 	  }
-	  mu1Phi_.denominator->Fill(m.phi());
-	  mu1Eta_.denominator->Fill(m.eta());
-	  mu1Pt_.denominator ->Fill(m.pt());
-	  mu2Phi_.denominator->Fill(m1.phi());
-	  mu2Eta_.denominator->Fill(m1.eta());
-	  mu2Pt_.denominator ->Fill(m1.pt());
-	  DiMuPt_.denominator ->Fill((m1.p4()+m.p4()).Pt() );
-	  DiMuEta_.denominator ->Fill((m1.p4()+m.p4()).Eta() );
-	  DiMuPhi_.denominator ->Fill((m1.p4()+m.p4()).Phi());
-	  DiMudR_.denominator ->Fill(reco::deltaR(m,m1));
-	  break;
-	case 6: 
-	  if (dimuonCL < minprob) continue;
-	  if ((Jpsi_) && (!Upsilon_)) {
-	    if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
-	  }
-	  if ((!Jpsi_) && (Upsilon_)) {
-	    if (DiMuMass> maxmassUpsilon || DiMuMass< minmassUpsilon) continue;
-	  }
-	  for (auto const & m2 : *muoHandle) { // triple muon paths
-	    if (false && !matchToTrigger(hltpath,m2, handleTriggerEvent)) continue;
-	    if (m2.pt() == m.pt()) continue;
-	    mu1Phi_.denominator->Fill(m.phi());
-	    mu1Eta_.denominator->Fill(m.eta());
-	    mu1Pt_.denominator ->Fill(m.pt());
-	    mu2Phi_.denominator->Fill(m1.phi());
-	    mu2Eta_.denominator->Fill(m1.eta());
-	    mu2Pt_.denominator ->Fill(m1.pt());
-	    mu3Phi_.denominator->Fill(m2.phi());
-	    mu3Eta_.denominator->Fill(m2.eta());
-	    mu3Pt_.denominator ->Fill(m2.pt());
-	  } 
-	  break; 
   
-	case 7: // the hists for photon monitoring will be filled on 515 line
-	  tnp_=false;
-	  break;
+          DiMuProb_.denominator ->Fill( dimuonCL);
+
+          if (num_genTriggerEventFlag_->on() &&  num_genTriggerEventFlag_->accept( iEvent, iSetup) )
+	    {
+	      //std::cout<<"inside num"<<enum_<<std::endl;
+	      //const std::string const std::string & hltpath1 hltpath1 = hltpaths_num[0];
+	      //int PrescleHLT=1, PrescleHLT1=1;
+	      //int PrescleL1 = 1;
+
+	      //PrescleHLT =  hltPrescale_->prescaleValue(iEvent, iSetup, hltpath1);//working !!!
+	      //PrescleL1 = (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).first.at(0).second;//
+	      //PrescleHLT= (hltPrescale_->prescaleValues(iEvent, iSetup, hltpath1)).second;
+	      //std::cout<<"L1 = "<< PrescleL1<<"HLT = "<< PrescleHLT<<"HLT1"<<PrescleHLT1 <<std::endl;
+	      ///PrescaleWeight = PrescleL1 * PrescleHLT;
  
-	case 8: // vtx monitoring, filling probability, DS, DCA, cos of pointing angle to the PV, eta, pT of dimuon
-	  if ((Jpsi_) && (!Upsilon_)) {
-	    if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
+	      if(false && !matchToTrigger(hltpath1,m1, handleTriggerEvent)) continue;
+	      if(false && !matchToTrigger(hltpath1,m, handleTriggerEvent)) continue;
+	      DiMuProb_.numerator ->Fill( dimuonCL,PrescaleWeight);          
+	    }
+          if (dimuonCL<minprob) continue;
+          DiMuDS_.denominator ->Fill( displacementFromBeamspotJpsi.perp()/sqrt(jerr.rerr(displacementFromBeamspotJpsi)));
+          DiMuPVcos_.denominator ->Fill(jpsi_cos );
+          DiMuPt_.denominator ->Fill((m1.p4()+m.p4()).Pt() );
+          DiMuEta_.denominator ->Fill((m1.p4()+m.p4()).Eta() );
+          DiMuDCA_.denominator ->Fill( cApp.distance());
+          if (num_genTriggerEventFlag_->on() &&  num_genTriggerEventFlag_->accept( iEvent, iSetup) )
+	    {
+	      //std::cout<<"inside num"<<enum_<<std::endl;
+	      //const std::string const std::string & hltpath1 hltpath1 = hltpaths_num[0];
+	      //int PrescleHLT=1, PrescleHLT1=1;
+	      //int PrescleL1 = 1;
+	      //PrescleHLT =  hltPrescale_->prescaleValue(iEvent, iSetup, hltpath1);//working !!!
+	      //PrescleL1 = (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).first.at(0).second;//
+	      //PrescleHLT= (hltPrescale_->prescaleValues(iEvent, iSetup, hltpath1)).second;
+	      //std::cout<<"L1 = "<< PrescleL1<<"HLT = "<< PrescleHLT<<"HLT1"<<PrescleHLT1 <<std::endl;
+	      ///PrescaleWeight = PrescleL1 * PrescleHLT;
+
+	      if(false && !matchToTrigger(hltpath1,m1, handleTriggerEvent)) continue;
+	      if(false && !matchToTrigger(hltpath1,m, handleTriggerEvent)) continue;
+	      DiMuDS_.numerator ->Fill( displacementFromBeamspotJpsi.perp()/sqrt(jerr.rerr(displacementFromBeamspotJpsi)),PrescaleWeight);
+	      DiMuPVcos_.numerator ->Fill(jpsi_cos ,PrescaleWeight);
+	      DiMuPt_.numerator ->Fill((m1.p4()+m.p4()).Pt() ,PrescaleWeight);
+	      DiMuEta_.numerator ->Fill((m1.p4()+m.p4()).Eta() ,PrescaleWeight);
+	      DiMuDCA_.numerator ->Fill( cApp.distance(),PrescaleWeight);
+
+	    }          
+          break;
+
+      	case 9:
+          if (dimuonCL<minprob) continue;
+          if (fabs(jpsi_cos)<mincos) continue;
+          if ((displacementFromBeamspotJpsi.perp()/sqrt(jerr.rerr(displacementFromBeamspotJpsi)))<minDS) continue;
+      	  if (trHandle.isValid())
+	    { 
+	      for (auto const & t : *trHandle) {
+		if(!trSelection_ref(t)) continue;
+		if(false && !matchToTrigger(hltpath,t, handleTriggerEvent)) continue;
+		const reco::Track& itrk1       = t ;                                                
+		if((reco::deltaR(t,m1) <= min_dR)) continue; // checking overlapping
+		if((reco::deltaR(t,m) <= min_dR)) continue;
+		if (! itrk1.quality(reco::TrackBase::highPurity))     continue;
+		reco::Particle::LorentzVector pB, p1, p2, p3;
+		double trackMass2 = kaon_mass * kaon_mass;
+		double MuMass2 = mu_mass * mu_mass;//0.1056583745 *0.1056583745;
+		double e1   = sqrt(m.momentum().Mag2()  + MuMass2          );
+		double e2   = sqrt(m1.momentum().Mag2()  + MuMass2          );
+		double e3   = sqrt(itrk1.momentum().Mag2() + trackMass2  );
+		p1   = reco::Particle::LorentzVector(m.px() , m.py() , m.pz() , e1  );
+		p2   = reco::Particle::LorentzVector(m1.px() , m1.py() , m1.pz() , e2  );
+		p3   = reco::Particle::LorentzVector(itrk1.px(), itrk1.py(), itrk1.pz(), e3  );
+		pB   = p1 + p2 + p3;
+		if( pB.mass()> maxmassJpsiTk || pB.mass()< minmassJpsiTk) continue;
+		reco::TransientTrack trTT(itrk1, &(*bFieldHandle));
+		std::vector<reco::TransientTrack> t_tks;
+		t_tks.push_back(mu1TT);
+		t_tks.push_back(mu2TT);
+		t_tks.push_back(trTT);
+		KalmanVertexFitter kvf;
+		TransientVertex tv  = kvf.vertex(t_tks);
+		reco::Vertex vertex = tv;
+		if (!tv.isValid()) continue;
+		float JpsiTkCL = 0;
+		if ((vertex.chi2()>=0.0) && (vertex.ndof()>0) )   
+		  JpsiTkCL = TMath::Prob(vertex.chi2(), vertex.ndof() );
+		math::XYZVector pperp(m.px() + m1.px() + itrk1.px(),
+				      m.py() + m1.py() + itrk1.py(),
+				      0.);
+		GlobalPoint secondaryVertex = tv.position();
+		GlobalError err             = tv.positionError();
+		GlobalPoint displacementFromBeamspot( -1*((vertexBeamSpot.x0() - secondaryVertex.x()) + 
+							  (secondaryVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dxdz()), 
+						      -1*((vertexBeamSpot.y0() - secondaryVertex.y()) + 
+							  (secondaryVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dydz()), 
+						      0);
+		reco::Vertex::Point vperp(displacementFromBeamspot.x(),displacementFromBeamspot.y(),0.);
+		float jpsiKcos = vperp.Dot(pperp)/(vperp.R()*pperp.R());
+		if (JpsiTkCL<minprob) continue;
+		if (fabs(jpsiKcos)<mincos) continue;
+		if ((displacementFromBeamspot.perp()/sqrt(err.rerr(displacementFromBeamspot)))<minDS) continue;
+		muPhi_.denominator->Fill(t.phi());
+		muEta_.denominator->Fill(t.eta());
+		muPt_.denominator ->Fill(t.pt());
+		if (num_genTriggerEventFlag_->on() &&  num_genTriggerEventFlag_->accept( iEvent, iSetup) )
+		  {
+		    //std::cout<<"inside num"<<enum_<<std::endl;
+		    //const std::string const std::string & hltpath1 hltpath1 = hltpaths_num[0];
+		    //int PrescleHLT=1, PrescleHLT1=1;
+		    //int PrescleL1 = 1;
+		    //PrescleHLT =  hltPrescale_->prescaleValue(iEvent, iSetup, hltpath1);//working !!!
+		    //PrescleL1 = (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).first.at(0).second;//
+		    //PrescleHLT= (hltPrescale_->prescaleValues(iEvent, iSetup, hltpath1)).second;
+		    //std::cout<<"L1 = "<< PrescleL1<<"HLT = "<< PrescleHLT<<"HLT1"<<PrescleHLT1 <<std::endl;
+		    ///PrescaleWeight = PrescleL1 * PrescleHLT;
+
+		    if(false && !matchToTrigger(hltpath1,m1, handleTriggerEvent)) continue;
+		    if(false && !matchToTrigger(hltpath1,m, handleTriggerEvent)) continue;
+		    if(false && !matchToTrigger(hltpath1,t, handleTriggerEvent)) continue;
+		    muPhi_.numerator->Fill(t.phi(),PrescaleWeight);
+		    muEta_.numerator->Fill(t.eta(),PrescaleWeight);
+		    muPt_.numerator ->Fill(t.pt(),PrescaleWeight);
+		  }   
+	      }
+	    }
+    	  break;
+
+    	case 10:
+	  if (trHandle.isValid()){
+  	    for (auto const & t : *trHandle) {
+  	      if(!trSelection_ref(t)) continue;
+  	      if(false && !matchToTrigger(hltpath,t, handleTriggerEvent)) continue;
+  	      const reco::Track& itrk1       = t ;                                                
+  	      if((reco::deltaR(t,m1) <= min_dR)) continue;//checking overlaping
+  	      if((reco::deltaR(t,m) <= min_dR)) continue;
+  	      if (! itrk1.quality(reco::TrackBase::highPurity))     continue;
+  	      reco::Particle::LorentzVector pB, p2, p3;
+	      double trackMass2 = kaon_mass * kaon_mass;
+	      double MuMass2 = mu_mass * mu_mass;//0.1056583745 *0.1056583745;
+  	      double e2   = sqrt(m1.momentum().Mag2()  + MuMass2          );
+  	      double e3   = sqrt(itrk1.momentum().Mag2() + trackMass2  );
+  	      p2   = reco::Particle::LorentzVector(m1.px() , m1.py() , m1.pz() , e2  );
+  	      p3   = reco::Particle::LorentzVector(itrk1.px(), itrk1.py(), itrk1.pz(), e3  );
+  	      pB   = p2 + p3;
+  	      if( pB.mass()> maxmassJpsiTk || pB.mass()< minmassJpsiTk) continue;
+  	      reco::TransientTrack trTT(itrk1, &(*bFieldHandle));
+  	      std::vector<reco::TransientTrack> t_tks;
+  	      t_tks.push_back(mu2TT);
+  	      t_tks.push_back(trTT);
+  	      KalmanVertexFitter kvf;
+  	      TransientVertex tv  = kvf.vertex(t_tks);
+  	      reco::Vertex vertex = tv;
+  	      if (!tv.isValid()) continue;
+  	      float JpsiTkCL = 0;
+  	      if ((vertex.chi2()>=0.0) && (vertex.ndof()>0) )   
+      		JpsiTkCL = TMath::Prob(vertex.chi2(), vertex.ndof() );
+  	      math::XYZVector pperp(m1.px() + itrk1.px(),
+  				    m1.py() + itrk1.py(),
+  				    0.);
+  	      GlobalPoint secondaryVertex = tv.position();
+  	      GlobalError err             = tv.positionError();
+  	      GlobalPoint displacementFromBeamspot( -1*((vertexBeamSpot.x0() - secondaryVertex.x()) + 
+  							(secondaryVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dxdz()), 
+  						    -1*((vertexBeamSpot.y0() - secondaryVertex.y()) + 
+  							(secondaryVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dydz()), 
+  						    0);
+  	      reco::Vertex::Point vperp(displacementFromBeamspot.x(),displacementFromBeamspot.y(),0.);
+  	      if (JpsiTkCL<minprob) continue;
+  	      muPhi_.denominator->Fill(m1.phi());
+  	      muEta_.denominator->Fill(m1.eta());
+  	      muPt_.denominator ->Fill(m1.pt());
+	      if (num_genTriggerEventFlag_->on() &&  num_genTriggerEventFlag_->accept( iEvent, iSetup) )
+		{
+		  //std::cout<<"inside num"<<enum_<<std::endl;
+		  //const std::string const std::string & hltpath1 hltpath1 = hltpaths_num[0];
+		  //int PrescleHLT=1, PrescleHLT1=1;
+		  //int PrescleL1 = 1;
+		  //PrescleHLT =  hltPrescale_->prescaleValue(iEvent, iSetup, hltpath1);//working !!!
+		  //PrescleL1 = (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).first.at(0).second;//
+		  //PrescleHLT= (hltPrescale_->prescaleValues(iEvent, iSetup, hltpath1)).second;
+		  //std::cout<<"L1 = "<< PrescleL1<<"HLT = "<< PrescleHLT<<"HLT1"<<PrescleHLT1 <<std::endl;
+		  ///PrescaleWeight = PrescleL1 * PrescleHLT;
+
+		  if(false && !matchToTrigger(hltpath1,m1, handleTriggerEvent)) continue;
+		  if(false && !matchToTrigger(hltpath1,m, handleTriggerEvent)) continue;
+		  if(false && !matchToTrigger(hltpath1,t, handleTriggerEvent)) continue;
+		  muPhi_.numerator->Fill(m1.phi(),PrescaleWeight);
+		  muEta_.numerator->Fill(m1.eta(),PrescaleWeight);
+		  muPt_.numerator ->Fill(m1.pt(),PrescaleWeight);
+	    
+		}
+  	    }
 	  }
-  
-	  if ((!Jpsi_) && (Upsilon_)) {
-	    if (DiMuMass> maxmassUpsilon || DiMuMass< minmassUpsilon) continue;
-	  }
-  
-	  DiMuProb_.denominator ->Fill( dimuonCL);
-	  if (dimuonCL < minprob) continue;
-	  DiMuDS_.denominator ->Fill( displacementFromBeamspotJpsi.perp() / sqrt(jerr.rerr(displacementFromBeamspotJpsi)));
-	  DiMuPVcos_.denominator ->Fill(jpsi_cos );
-	  DiMuPt_.denominator ->Fill((m1.p4()+m.p4()).Pt() );
-	  DiMuEta_.denominator ->Fill((m1.p4()+m.p4()).Eta() );
-	  DiMuDCA_.denominator ->Fill( cApp.distance());
-	  break;
-	case 9:
+  	  break;
+
+    	case 11:
 	  if (dimuonCL < minprob) continue;
 	  if (fabs(jpsi_cos) < mincos) continue;
 	  if ((displacementFromBeamspotJpsi.perp() / sqrt(jerr.rerr(displacementFromBeamspotJpsi))) < minDS) continue;
-  
 	  if (trHandle.isValid()) {
 	    ////////////////////////
-  
-	    for (auto const & t : *trHandle) {
- 
-	      if (!trSelection_ref(t)) continue;
-	      if (false && !matchToTrigger(hltpath,t, handleTriggerEvent)) continue;
-	      const reco::Track& itrk1 = t ; 
- 
-	      if ((reco::deltaR(t,m1) <= min_dR)) continue; // checking overlapping
-	      if ((reco::deltaR(t,m) <= min_dR)) continue;
- 
-	      if (! itrk1.quality(reco::TrackBase::highPurity)) continue;
-  
-	      reco::Particle::LorentzVector pB, p1, p2, p3;
-	      double trackMass2 = kaon_mass * kaon_mass;
-	      double MuMass2 = mu_mass * mu_mass; // 0.1056583745 *0.1056583745;
-	      double e1 = sqrt(m.momentum().Mag2()  + MuMass2 );
-	      double e2 = sqrt(m1.momentum().Mag2()  + MuMass2 );
-	      double e3 = sqrt(itrk1.momentum().Mag2() + trackMass2  );
- 
-	      p1 = reco::Particle::LorentzVector(m.px() , m.py() , m.pz() , e1  );
-	      p2 = reco::Particle::LorentzVector(m1.px() , m1.py() , m1.pz() , e2  );
-	      p3 = reco::Particle::LorentzVector(itrk1.px(), itrk1.py(), itrk1.pz(), e3  );
-	      pB = p1 + p2 + p3;
-	      if ( pB.mass() > maxmassJpsiTk || pB.mass() < minmassJpsiTk) continue;
-	      reco::TransientTrack trTT(itrk1, &(*bFieldHandle));
-  
-	      std::vector<reco::TransientTrack> t_tks;
-	      t_tks.push_back(mu1TT);
-	      t_tks.push_back(mu2TT);
-	      t_tks.push_back(trTT);
- 
-	      KalmanVertexFitter kvf;
-	      TransientVertex tv  = kvf.vertex(t_tks);
-	      reco::Vertex vertex = tv;
-	      if (!tv.isValid()) continue;
-	      float JpsiTkCL = 0;
-	      if ((vertex.chi2() >= 0.0) && (vertex.ndof() > 0) ) 
-		JpsiTkCL = TMath::Prob(vertex.chi2(), vertex.ndof() );
-	      math::XYZVector pperp(m.px() + m1.px() + itrk1.px(),
-				    m.py() + m1.py() + itrk1.py(),
-				    0.);
-	      GlobalPoint secondaryVertex = tv.position();
-	      GlobalError err             = tv.positionError();
-	      GlobalPoint displacementFromBeamspot( -1*((vertexBeamSpot.x0() - secondaryVertex.x()) + 
-							(secondaryVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dxdz()), 
-						    -1*((vertexBeamSpot.y0() - secondaryVertex.y()) + 
-							(secondaryVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dydz()), 
-						    0);
-	      reco::Vertex::Point vperp(displacementFromBeamspot.x(),displacementFromBeamspot.y(),0.);
-	      float jpsiKcos = vperp.Dot(pperp) / (vperp.R()*pperp.R());
-	      if (JpsiTkCL < minprob) continue;
-	      if (fabs(jpsiKcos) < mincos) continue;
-	      if ((displacementFromBeamspot.perp() / sqrt(err.rerr(displacementFromBeamspot)))<minDS) continue;
-	      muPhi_.denominator->Fill(t.phi());
-	      muEta_.denominator->Fill(t.eta());
-	      muPt_.denominator ->Fill(t.pt());
- 
-	      /////////////////////////
-	    }
-	  }
-	  break;
-	case 10:
-	  if (trHandle.isValid()) {
 	    for (auto const & t : *trHandle) {
 	      if (!trSelection_ref(t)) continue;
 	      if (false && !matchToTrigger(hltpath,t, handleTriggerEvent)) continue;
-	      const reco::Track& itrk1 = t ; 
-	      if ((reco::deltaR(t,m1) <= min_dR)) continue; // checking overlapping
-	      if ((reco::deltaR(t,m) <= min_dR)) continue;
-	      if (! itrk1.quality(reco::TrackBase::highPurity)) continue;
-	      reco::Particle::LorentzVector pB, p2, p3;
-	      double trackMass2 = kaon_mass * kaon_mass;
-	      double MuMass2 = mu_mass * mu_mass; // 0.1056583745 *0.1056583745;
-	      double e2 = sqrt(m1.momentum().Mag2()  + MuMass2 );
-	      double e3 = sqrt(itrk1.momentum().Mag2() + trackMass2  );
-	      p2 = reco::Particle::LorentzVector(m1.px() , m1.py() , m1.pz() , e2  );
-	      p3 = reco::Particle::LorentzVector(itrk1.px(), itrk1.py(), itrk1.pz(), e3  );
-	      pB = p2 + p3;
-	      if ( pB.mass() > maxmassJpsiTk || pB.mass()< minmassJpsiTk) continue;
-	      reco::TransientTrack trTT(itrk1, &(*bFieldHandle));
-	      std::vector<reco::TransientTrack> t_tks;
-	      t_tks.push_back(mu2TT);
-	      t_tks.push_back(trTT);
-	      KalmanVertexFitter kvf;
-	      TransientVertex tv  = kvf.vertex(t_tks);
-	      reco::Vertex vertex = tv;
-	      if (!tv.isValid()) continue;
-	      float JpsiTkCL = 0;
-	      if ((vertex.chi2() >= 0.0) && (vertex.ndof() > 0) ) 
-		JpsiTkCL = TMath::Prob(vertex.chi2(), vertex.ndof() );
-	      math::XYZVector pperp(m1.px() + itrk1.px(),
-				    m1.py() + itrk1.py(),
-				    0.);
-	      GlobalPoint secondaryVertex = tv.position();
-	      GlobalError err             = tv.positionError();
-	      GlobalPoint displacementFromBeamspot( -1*((vertexBeamSpot.x0() - secondaryVertex.x()) + 
-							(secondaryVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dxdz()), 
-						    -1*((vertexBeamSpot.y0() - secondaryVertex.y()) + 
-							(secondaryVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dydz()), 
-						    0);
-	      reco::Vertex::Point vperp(displacementFromBeamspot.x(),displacementFromBeamspot.y(),0.);
-	      if (JpsiTkCL<minprob) continue;
-	      muPhi_.denominator->Fill(m1.phi());
-	      muEta_.denominator->Fill(m1.eta());
-	      muPt_.denominator ->Fill(m1.pt());
-	    }
-	  }
-	  break;
-	case 11:
-	  case11_selection(dimuonCL, jpsi_cos, displacementFromBeamspotJpsi, jerr, trHandle, hltpath, handleTriggerEvent, m, m1, bFieldHandle, vertexBeamSpot, mu1Phi_.denominator, mu1Eta_.denominator, mu1Pt_.denominator, mu2Phi_.denominator, mu2Eta_.denominator, mu2Pt_.denominator);
+	      if ((reco::deltaR(t,m) <= min_dR)) continue; // checking overlapping
+	      if ((reco::deltaR(t,m1) <= min_dR)) continue;  // checking overlapping
+	      for (auto const & t1 : *trHandle) {
+		if (&t - &(*trHandle)[0]  >=  &t1 - &(*trHandle)[0]) continue; // not enough, need the following DeltaR checks
+		//if (t.pt() == t1.pt()) continue;
+		if (!trSelection_ref(t1)) continue;
+		if (false && !matchToTrigger(hltpath,t1, handleTriggerEvent)) continue;
+		if ((reco::deltaR(t1,m) <= min_dR)) continue;  // checking overlapping
+		if ((reco::deltaR(t1,m1) <= min_dR)) continue; // checking overlapping
+		if ((reco::deltaR(t,t1) <= min_dR)) continue;  // checking overlapping
+		const reco::Track& itrk1 = t ;
+		const reco::Track& itrk2 = t1 ;
+		if (! itrk1.quality(reco::TrackBase::highPurity)) continue;
+		if (! itrk2.quality(reco::TrackBase::highPurity)) continue;
+		reco::Particle::LorentzVector pB, pTkTk, p1, p2, p3, p4;
+		double trackMass2 = kaon_mass * kaon_mass;
+		double MuMass2 = mu_mass * mu_mass; // 0.1056583745 *0.1056583745;
+		double e1 = sqrt(m.momentum().Mag2()  + MuMass2 );
+		double e2 = sqrt(m1.momentum().Mag2()  + MuMass2 );
+		double e3 = sqrt(itrk1.momentum().Mag2() + trackMass2  );
+		double e4 = sqrt(itrk2.momentum().Mag2() + trackMass2  );
+		p1 = reco::Particle::LorentzVector(m.px() , m.py() , m.pz() , e1  );
+		p2 = reco::Particle::LorentzVector(m1.px() , m1.py() , m1.pz() , e2  );
+		p3 = reco::Particle::LorentzVector(itrk1.px(), itrk1.py(), itrk1.pz(), e3  );
+		p4 = reco::Particle::LorentzVector(itrk2.px(), itrk2.py(), itrk2.pz(), e4  );
+		pTkTk = p3 + p4;
+		if (pTkTk.mass() > maxmassTkTk || pTkTk.mass() < minmassTkTk) continue;
+		pB = p1 + p2 + p3 + p4;
+		if ( pB.mass() > maxmassJpsiTk || pB.mass()< minmassJpsiTk) continue;
+		reco::TransientTrack mu1TT(m.track(), &(*bFieldHandle));
+		reco::TransientTrack mu2TT(m1.track(), &(*bFieldHandle));
+		reco::TransientTrack trTT(itrk1, &(*bFieldHandle));
+		reco::TransientTrack tr1TT(itrk2, &(*bFieldHandle));
+		std::vector<reco::TransientTrack> t_tks;
+		t_tks.push_back(mu1TT);
+		t_tks.push_back(mu2TT);
+		t_tks.push_back(trTT);
+		t_tks.push_back(tr1TT);
+		KalmanVertexFitter kvf;
+		TransientVertex tv  = kvf.vertex(t_tks); // this will compare the tracks
+		reco::Vertex vertex = tv;
+		if (!tv.isValid()) continue;
+		float JpsiTkCL = 0;
+		if ((vertex.chi2() >= 0.0) && (vertex.ndof() > 0) )
+		  JpsiTkCL = TMath::Prob(vertex.chi2(), vertex.ndof() );
+		math::XYZVector pperp(m.px() + m1.px() + itrk1.px() + itrk2.px(),
+				      m.py() + m1.py() + itrk1.py() + itrk2.py(),
+				      0.);
+		GlobalPoint secondaryVertex = tv.position();
+		GlobalError err             = tv.positionError();
+		GlobalPoint displacementFromBeamspot( -1*((vertexBeamSpot.x0() - secondaryVertex.x()) +
+							  (secondaryVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dxdz()),
+						      -1*((vertexBeamSpot.y0() - secondaryVertex.y()) +
+							  (secondaryVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dydz()),
+						      0);
+		reco::Vertex::Point vperp(displacementFromBeamspot.x(),displacementFromBeamspot.y(),0.);
+		float jpsiKcos = vperp.Dot(pperp) / (vperp.R()*pperp.R());
+		if (JpsiTkCL < minprob) continue;
+		if (fabs(jpsiKcos) < mincos) continue;
+		if ((displacementFromBeamspot.perp() / sqrt(err.rerr(displacementFromBeamspot))) < minDS) continue;
+
+		mu1Phi_.denominator->Fill(t.phi());
+		mu1Eta_.denominator->Fill(t.eta());
+		mu1Pt_.denominator ->Fill(t.pt());
+		mu2Phi_.denominator->Fill(t1.phi());
+		mu2Eta_.denominator->Fill(t1.eta());
+		mu2Pt_.denominator ->Fill(t1.pt());
+
+		if (num_genTriggerEventFlag_->on() &&  num_genTriggerEventFlag_->accept( iEvent, iSetup) )
+		  {
+		    //std::cout<<"inside num"<<enum_<<std::endl;
+		    //const std::string const std::string & hltpath1 hltpath1 = hltpaths_num[0];
+		    //int PrescleHLT=1, PrescleHLT1=1;
+		    //int PrescleL1 = 1;
+		    //PrescleHLT =  hltPrescale_->prescaleValue(iEvent, iSetup, hltpath1);//working !!!
+		    //PrescleL1 = (hltPrescale_->prescaleValuesInDetail(iEvent, iSetup, hltpath1)).first.at(0).second;//
+		    //PrescleHLT= (hltPrescale_->prescaleValues(iEvent, iSetup, hltpath1)).second;
+		    //std::cout<<"L1 = "<< PrescleL1<<"HLT = "<< PrescleHLT<<"HLT1"<<PrescleHLT1 <<std::endl;
+		    ///PrescaleWeight = PrescleL1 * PrescleHLT;
+
+		    if(false && !matchToTrigger(hltpath1,m1, handleTriggerEvent)) continue;
+		    if(false && !matchToTrigger(hltpath1,m, handleTriggerEvent)) continue;
+		    if(false && !matchToTrigger(hltpath1,t, handleTriggerEvent)) continue;
+		    if(false && !matchToTrigger(hltpath1,t1, handleTriggerEvent)) continue;
+  
+		    mu1Phi_.numerator->Fill(t.phi(),PrescaleWeight);
+		    mu1Eta_.numerator->Fill(t.eta(),PrescaleWeight);
+		    mu1Pt_.numerator ->Fill(t.pt(),PrescaleWeight);
+		    mu2Phi_.numerator->Fill(t1.phi(),PrescaleWeight);
+		    mu2Eta_.numerator->Fill(t1.eta(),PrescaleWeight);
+		    mu2Pt_.numerator ->Fill(t1.pt(),PrescaleWeight);
+		  }
+	      } // for (auto const & t1 : *trHandle)
+	    } // for (auto const & t : *trHandle)
+	  } // if (trHandle.isValid())
+	
 	  break;
 	} 
       }
     }
-
-
-    if (enum_ == 7) { // photons
-      const std::string & hltpath = hltpaths_den[0];
-      for (auto const & p : *phHandle) {
-	if (false && !matchToTrigger(hltpath,p, handleTriggerEvent)) continue;
-	phPhi_.denominator->Fill(p.phi());
-	phEta_.denominator->Fill(p.eta());
-	phPt_.denominator ->Fill(p.pt());
-      }
-
-    } 
-    //
-    /////////
-    // filling numerator hists
-    if (num_genTriggerEventFlag_->on() && ! num_genTriggerEventFlag_->accept( iEvent, iSetup) ) return;
-    iEvent.getByToken( hltInputTag_, handleTriggerEvent);
-    if (handleTriggerEvent->sizeFilters()== 0) return;
-    const std::string & hltpath1 = hltpaths_num[0]; 
-    for (auto const & m : *muoHandle ) {
-      if (false && !matchToTrigger(hltpath1,m, handleTriggerEvent)) continue;
-      if (!muoSelection_ref(m)) continue; 
-      for (auto const & m1 : *muoHandle ) {
-	if (seagull_ && ((m.charge()* deltaPhi(m.phi(), m1.phi())) > 0.) ) continue;
-	if (m.charge()*m1.charge() > 0 ) continue;
-	if (m1.pt() == m.pt()) continue;
-	if (!muoSelection_ref(m1)) continue; 
-	if (false && !matchToTrigger(hltpath1,m1, handleTriggerEvent)) continue;
-	if (!DMSelection_ref(m1.p4() + m.p4())) continue;
-	iSetup.get<IdealMagneticFieldRecord>().get(bFieldHandle);
-	const reco::BeamSpot& vertexBeamSpot = *beamSpot;
-	std::vector<reco::TransientTrack> j_tks;
-	reco::TransientTrack mu1TT(m.track(), &(*bFieldHandle));
-	reco::TransientTrack mu2TT(m1.track(), &(*bFieldHandle));
-	j_tks.push_back(mu1TT);
-	j_tks.push_back(mu2TT);
-	KalmanVertexFitter jkvf;
-	TransientVertex jtv = jkvf.vertex(j_tks);
-	if (!jtv.isValid()) continue;
-	reco::Vertex jpsivertex = jtv;
-	float dimuonCL = 0;
-	if ( (jpsivertex.chi2() >= 0) && (jpsivertex.ndof() > 0) ) // I think these values are "unphysical"(no one will need to change them ever)so the can be fixed
-	  dimuonCL = TMath::Prob(jpsivertex.chi2(), jpsivertex.ndof() );
-	math::XYZVector jpperp(m.px() + m1.px() ,
-			       m.py() + m1.py() ,
-			       0.);
-	GlobalPoint jVertex = jtv.position();
-	GlobalError jerr    = jtv.positionError();
-	GlobalPoint displacementFromBeamspotJpsi( -1*((vertexBeamSpot.x0() - jVertex.x()) + (jVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dxdz()),
-						  -1*((vertexBeamSpot.y0() - jVertex.y()) + (jVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dydz()),
-						  0);
-	reco::Vertex::Point vperpj(displacementFromBeamspotJpsi.x(), displacementFromBeamspotJpsi.y(), 0.);
-	float jpsi_cos = vperpj.Dot(jpperp) / (vperpj.R()*jpperp.R());
-	TrajectoryStateClosestToPoint mu1TS = mu1TT.impactPointTSCP();
-	TrajectoryStateClosestToPoint mu2TS = mu2TT.impactPointTSCP();
-	ClosestApproachInRPhi cApp;
-	if (mu1TS.isValid() && mu2TS.isValid()) {
-	  cApp.calculate(mu1TS.theState(), mu2TS.theState());
-	}
-	double DiMuMass = (m1.p4()+m.p4()).M();
-	switch(enum_) { // enum_ = 1...9, represents different sets of variables for different paths, we want to have different hists for different paths
-	case 1: tnp_=true; // already filled hists for tnp method
-	case 2:
-	  if ((Jpsi_) && (!Upsilon_)) {
-	    if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
-	  }
-	  if ((!Jpsi_) && (Upsilon_)) {
-	    if (DiMuMass> maxmassUpsilon || DiMuMass< minmassUpsilon) continue;
-	  }
-	  if (dimuonCL < minprob) continue;
-	  mu1Phi_.numerator->Fill(m.phi(),PrescaleWeight);
-	  mu1Eta_.numerator->Fill(m.eta(),PrescaleWeight);
-	  mu1Pt_.numerator ->Fill(m.pt(),PrescaleWeight);
-	  mu2Phi_.numerator->Fill(m1.phi(),PrescaleWeight);
-	  mu2Eta_.numerator->Fill(m1.eta(),PrescaleWeight);
-	  mu2Pt_.numerator ->Fill(m1.pt(),PrescaleWeight);
-	  DiMuPt_.numerator ->Fill((m1.p4()+m.p4()).Pt() ,PrescaleWeight);
-	  DiMuEta_.numerator ->Fill((m1.p4()+m.p4()).Eta() ,PrescaleWeight);
-	  DiMuPhi_.numerator ->Fill((m1.p4()+m.p4()).Phi(),PrescaleWeight);
-	  break;
-	case 3:
-	  if ((Jpsi_) && (!Upsilon_)) {
-	    if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
-	  }
-
-	  if ((!Jpsi_) && (Upsilon_)) {
-	    if (DiMuMass> maxmassUpsilon || DiMuMass< minmassUpsilon) continue;
-	  }
-	  if (dimuonCL < minprob) continue;
-	  mu1Eta_.numerator->Fill(m.eta(),PrescaleWeight);
-	  mu1Pt_.numerator ->Fill(m.pt(),PrescaleWeight);
-	  mu2Eta_.numerator->Fill(m1.eta(),PrescaleWeight);
-	  mu2Pt_.numerator ->Fill(m1.pt(),PrescaleWeight);
-	  break; 
-	case 4:
-	  if (dimuonCL < minprob) continue;
-	  DiMuMass_.numerator ->Fill(DiMuMass);
-	  if ((Jpsi_) && (!Upsilon_)) {
-	    if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
-	  }
-	  if ((!Jpsi_) && (Upsilon_)) {
-	    if (DiMuMass> maxmassUpsilon || DiMuMass< minmassUpsilon) continue;
-	  }
-	  mu1Phi_.numerator->Fill(m.phi(),PrescaleWeight);
-	  mu1Eta_.numerator->Fill(m.eta(),PrescaleWeight);
-	  mu1Pt_.numerator ->Fill(m.pt(),PrescaleWeight);
-	  mu2Phi_.numerator->Fill(m1.phi(),PrescaleWeight);
-	  mu2Eta_.numerator->Fill(m1.eta(),PrescaleWeight);
-	  mu2Pt_.numerator ->Fill(m1.pt(),PrescaleWeight);
-	  DiMuPt_.numerator ->Fill((m1.p4()+m.p4()).Pt() ,PrescaleWeight);
-	  DiMuEta_.numerator ->Fill((m1.p4()+m.p4()).Eta() ,PrescaleWeight);
-	  DiMuPhi_.numerator ->Fill((m1.p4()+m.p4()).Phi(),PrescaleWeight);
-	  DiMudR_.numerator ->Fill(reco::deltaR(m,m1),PrescaleWeight);
-	  break;
-	case 5:
-	  if (dimuonCL < minprob) continue;
-	  if ((Jpsi_) && (!Upsilon_)) {
-	    if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
-	  }
-	  if ((!Jpsi_) && (Upsilon_)) {
-	    if (DiMuMass> maxmassUpsilon || DiMuMass< minmassUpsilon) continue;
-	  }
-	  mu1Phi_.numerator->Fill(m.phi(),PrescaleWeight);
-	  mu1Eta_.numerator->Fill(m.eta(),PrescaleWeight);
-	  mu1Pt_.numerator ->Fill(m.pt(),PrescaleWeight);
-	  mu2Phi_.numerator->Fill(m1.phi(),PrescaleWeight);
-	  mu2Eta_.numerator->Fill(m1.eta(),PrescaleWeight);
-	  mu2Pt_.numerator ->Fill(m1.pt(),PrescaleWeight);
-	  DiMuPt_.numerator ->Fill((m1.p4()+m.p4()).Pt() ,PrescaleWeight);
-	  DiMuEta_.numerator ->Fill((m1.p4()+m.p4()).Eta() ,PrescaleWeight);
-	  DiMuPhi_.numerator ->Fill((m1.p4()+m.p4()).Phi(),PrescaleWeight);
-	  DiMudR_.numerator ->Fill(reco::deltaR(m,m1),PrescaleWeight);
-	  break;
-	case 6: 
-	  if (dimuonCL < minprob) continue;
-	  if ((Jpsi_) && (!Upsilon_)) {
-	    if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
-	  }
-	  if ((!Jpsi_) && (Upsilon_)) {
-	    if (DiMuMass> maxmassUpsilon || DiMuMass< minmassUpsilon) continue;
-	  }
-	  for (auto const & m2 : *muoHandle) { // triple muon paths
-	    if (false && !matchToTrigger(hltpath1,m2, handleTriggerEvent)) continue;
-	    if (m2.pt() == m.pt()) continue;
-	    mu1Phi_.numerator->Fill(m.phi(),PrescaleWeight);
-	    mu1Eta_.numerator->Fill(m.eta(),PrescaleWeight);
-	    mu1Pt_.numerator ->Fill(m.pt(),PrescaleWeight);
-	    mu2Phi_.numerator->Fill(m1.phi(),PrescaleWeight);
-	    mu2Eta_.numerator->Fill(m1.eta(),PrescaleWeight);
-	    mu2Pt_.numerator ->Fill(m1.pt(),PrescaleWeight);
-	    mu3Phi_.numerator->Fill(m2.phi(),PrescaleWeight);
-	    mu3Eta_.numerator->Fill(m2.eta(),PrescaleWeight);
-	    mu3Pt_.numerator ->Fill(m2.pt(),PrescaleWeight);
-	  } 
-	  break; 
-	case 7: // the hists for photon monitoring will be filled on 515 line
-	  tnp_=false;
-	  break;
-	case 8: // vtx monitoring, filling probability, DS, DCA, cos of pointing angle to the PV, eta, pT of dimuon
-	  if ((Jpsi_) && (!Upsilon_)) {
-	    if (DiMuMass> maxmassJpsi || DiMuMass< minmassJpsi) continue;
-	  }
-	  if ((!Jpsi_) && (Upsilon_)) {
-	    if (DiMuMass> maxmassUpsilon || DiMuMass< minmassUpsilon) continue;
-	  }
-	  DiMuProb_.numerator ->Fill( dimuonCL,PrescaleWeight);
-	  if (dimuonCL < minprob) continue;
-	  DiMuDS_.numerator ->Fill( displacementFromBeamspotJpsi.perp() / sqrt(jerr.rerr(displacementFromBeamspotJpsi)),PrescaleWeight);
-	  DiMuPVcos_.numerator ->Fill(jpsi_cos ,PrescaleWeight);
-	  DiMuPt_.numerator ->Fill((m1.p4()+m.p4()).Pt() ,PrescaleWeight);
-	  DiMuEta_.numerator ->Fill((m1.p4()+m.p4()).Eta() ,PrescaleWeight);
-	  DiMuDCA_.numerator ->Fill( cApp.distance(),PrescaleWeight);
-	  break;
-	case 9:
-	  if (dimuonCL < minprob) continue;
-	  if (fabs(jpsi_cos) < mincos) continue;
-	  if ((displacementFromBeamspotJpsi.perp() / sqrt(jerr.rerr(displacementFromBeamspotJpsi))) < minDS) continue;
-	  if (trHandle.isValid()) {
-	    for (auto const & t : *trHandle) {
-	      if (!trSelection_ref(t)) continue;
-	      if (false && !matchToTrigger(hltpath1,t, handleTriggerEvent)) continue;
-	      const reco::Track& itrk1 = t ; 
-	      if ((reco::deltaR(t,m1) <= min_dR)) continue; // checking overlapping
-	      if ((reco::deltaR(t,m) <= min_dR)) continue;
-	      if (! itrk1.quality(reco::TrackBase::highPurity)) continue;
-	      reco::Particle::LorentzVector pB, p1, p2, p3;
-	      double trackMass2 = kaon_mass * kaon_mass;
-	      double MuMass2 = mu_mass * mu_mass; // 0.1056583745 *0.1056583745;
-	      double e1 = sqrt(m.momentum().Mag2()  + MuMass2 );
-	      double e2 = sqrt(m1.momentum().Mag2()  + MuMass2 );
-	      double e3 = sqrt(itrk1.momentum().Mag2() + trackMass2  );
-	      p1 = reco::Particle::LorentzVector(m.px() , m.py() , m.pz() , e1  );
-	      p2 = reco::Particle::LorentzVector(m1.px() , m1.py() , m1.pz() , e2  );
-	      p3 = reco::Particle::LorentzVector(itrk1.px(), itrk1.py(), itrk1.pz(), e3  );
-	      pB = p1 + p2 + p3;
-	      if ( pB.mass() > maxmassJpsiTk || pB.mass()< minmassJpsiTk) continue;
-	      reco::TransientTrack trTT(itrk1, &(*bFieldHandle));
-	      std::vector<reco::TransientTrack> t_tks;
-	      t_tks.push_back(mu1TT);
-	      t_tks.push_back(mu2TT);
-	      t_tks.push_back(trTT);
-	      KalmanVertexFitter kvf;
-	      TransientVertex tv  = kvf.vertex(t_tks);
-	      reco::Vertex vertex = tv;
-	      if (!tv.isValid()) continue;
-	      float JpsiTkCL = 0;
-	      if ((vertex.chi2() >= 0.0) && (vertex.ndof() > 0) ) 
-		JpsiTkCL = TMath::Prob(vertex.chi2(), vertex.ndof() );
-	      math::XYZVector pperp(m.px() + m1.px() + itrk1.px(),
-				    m.py() + m1.py() + itrk1.py(),
-				    0.);
-	      GlobalPoint secondaryVertex = tv.position();
-	      GlobalError err             = tv.positionError();
-	      GlobalPoint displacementFromBeamspot( -1*((vertexBeamSpot.x0() - secondaryVertex.x()) + 
-							(secondaryVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dxdz()), 
-						    -1*((vertexBeamSpot.y0() - secondaryVertex.y()) + 
-							(secondaryVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dydz()), 
-						    0);
-	      reco::Vertex::Point vperp(displacementFromBeamspot.x(),displacementFromBeamspot.y(),0.);
-	      float jpsiKcos = vperp.Dot(pperp) / (vperp.R()*pperp.R());
-	      if (JpsiTkCL<minprob) continue;
-	      if (fabs(jpsiKcos)<mincos) continue;
-	      if ((displacementFromBeamspot.perp() / sqrt(err.rerr(displacementFromBeamspot)))<minDS) continue;
-	      muPhi_.numerator->Fill(t.phi(),PrescaleWeight);
-	      muEta_.numerator->Fill(t.eta(),PrescaleWeight);
-	      muPt_.numerator ->Fill(t.pt(),PrescaleWeight);
-	    }
-	  }
-	  break;
-
-	case 10:
-	  if (trHandle.isValid()) {
-	    for (auto const & t : *trHandle) {
-	      if (!trSelection_ref(t)) continue;
-	      if (false && !matchToTrigger(hltpath1,t, handleTriggerEvent)) continue;
-	      const reco::Track& itrk1 = t ; 
-	      if ((reco::deltaR(t,m1) <= min_dR)) continue; // checking overlapping
-	      if ((reco::deltaR(t,m) <= min_dR)) continue;
-	      if (! itrk1.quality(reco::TrackBase::highPurity)) continue;
-	      reco::Particle::LorentzVector pB, p2, p3;
-	      double trackMass2 = kaon_mass * kaon_mass;
-	      double MuMass2 = mu_mass * mu_mass; // 0.1056583745 *0.1056583745;
-	      double e2 = sqrt(m1.momentum().Mag2()  + MuMass2 );
-	      double e3 = sqrt(itrk1.momentum().Mag2() + trackMass2  );
-	      p2 = reco::Particle::LorentzVector(m1.px() , m1.py() , m1.pz() , e2  );
-	      p3 = reco::Particle::LorentzVector(itrk1.px(), itrk1.py(), itrk1.pz(), e3  );
-	      pB = p2 + p3;
-	      if ( pB.mass() > maxmassJpsiTk || pB.mass()< minmassJpsiTk) continue;
-	      reco::TransientTrack trTT(itrk1, &(*bFieldHandle));
-	      std::vector<reco::TransientTrack> t_tks;
-	      t_tks.push_back(mu2TT);
-	      t_tks.push_back(trTT);
-	      if (t_tks.size()!=2) continue;
-	      KalmanVertexFitter kvf;
-	      TransientVertex tv  = kvf.vertex(t_tks);
-	      reco::Vertex vertex = tv;
-	      if (!tv.isValid()) continue;
-	      float JpsiTkCL = 0;
-	      if ((vertex.chi2() >= 0.0) && (vertex.ndof() > 0) ) 
-		JpsiTkCL = TMath::Prob(vertex.chi2(), vertex.ndof() );
-	      math::XYZVector pperp(m1.px() + itrk1.px(),
-				    m1.py() + itrk1.py(),
-				    0.);
-	      GlobalPoint secondaryVertex = tv.position();
-	      GlobalError err             = tv.positionError();
-	      GlobalPoint displacementFromBeamspot( -1*((vertexBeamSpot.x0() - secondaryVertex.x()) + 
-							(secondaryVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dxdz()), 
-						    -1*((vertexBeamSpot.y0() - secondaryVertex.y()) + 
-							(secondaryVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dydz()), 
-						    0);
-	      reco::Vertex::Point vperp(displacementFromBeamspot.x(),displacementFromBeamspot.y(),0.);
-	      if (JpsiTkCL<minprob) continue;
-	      muPhi_.numerator->Fill(m1.phi(),PrescaleWeight);
-	      muEta_.numerator->Fill(m1.eta(),PrescaleWeight);
-	      muPt_.numerator ->Fill(m1.pt(),PrescaleWeight);
-	    }
-	  }
-	  break;
-	case 11:
-	  case11_selection(dimuonCL, jpsi_cos, displacementFromBeamspotJpsi, jerr, trHandle, hltpath, handleTriggerEvent, m, m1, bFieldHandle, vertexBeamSpot, mu1Phi_.numerator, mu1Eta_.numerator, mu1Pt_.numerator, mu2Phi_.numerator, mu2Eta_.numerator, mu2Pt_.numerator);
-	  break;
-	} 
-      }
-    }
-    if (enum_ == 7) { // photons
-      const std::string &hltpath = hltpaths_num[0];
-      for (auto const & p : *phHandle) {
-	if (false && !matchToTrigger(hltpath,p, handleTriggerEvent)) continue;
-	phPhi_.numerator->Fill(p.phi(),PrescaleWeight);
-	phEta_.numerator->Fill(p.eta(),PrescaleWeight);
-	phPt_.numerator ->Fill(p.pt(),PrescaleWeight);
-      }
-    }
-  }
+  } 
 }
-
-
-
 
 void BPHMonitor::fillHistoPSetDescription(edm::ParameterSetDescription & pset)
 {
@@ -1056,12 +1146,12 @@ void BPHMonitor::fillDescriptions(edm::ConfigurationDescriptions & descriptions)
   desc.add<edm::ParameterSetDescription>("numGenericTriggerEventPSet", genericTriggerEventPSet);
   desc.add<edm::ParameterSetDescription>("denGenericTriggerEventPSet", genericTriggerEventPSet);
 
-  edm::ParameterSetDescription PrescaleTriggerEventPSet;
-  PrescaleTriggerEventPSet.add<unsigned int>("prescaleWeightVerbosityLevel",0);
-  PrescaleTriggerEventPSet.add<edm::InputTag>("prescaleWeightTriggerResults",edm::InputTag("TriggerResults::HLT"));
-  PrescaleTriggerEventPSet.add<edm::InputTag>("prescaleWeightL1GtTriggerMenuLite",edm::InputTag("l1GtTriggerMenuLite"));
-  PrescaleTriggerEventPSet.add<std::vector<std::string>>("prescaleWeightHltPaths",{});
-  desc.add<edm::ParameterSetDescription>("PrescaleTriggerEventPSet", PrescaleTriggerEventPSet);
+//  edm::ParameterSetDescription PrescaleTriggerEventPSet;
+//  PrescaleTriggerEventPSet.add<unsigned int>("prescaleWeightVerbosityLevel",0);
+//  PrescaleTriggerEventPSet.add<edm::InputTag>("prescaleWeightTriggerResults",edm::InputTag("TriggerResults::HLT"));
+//  PrescaleTriggerEventPSet.add<edm::InputTag>("prescaleWeightL1GtTriggerMenuLite",edm::InputTag("l1GtTriggerMenuLite"));
+//  PrescaleTriggerEventPSet.add<std::vector<std::string>>("prescaleWeightHltPaths",{});
+//  desc.add<edm::ParameterSetDescription>("PrescaleTriggerEventPSet", PrescaleTriggerEventPSet);
 
   edm::ParameterSetDescription histoPSet;
   edm::ParameterSetDescription phiPSet;
@@ -1126,90 +1216,26 @@ bool BPHMonitor::matchToTrigger(const std::string  &theTriggerName , T t, edm::H
     }
 
     return matchedToTrigger;
+  } else {
+    // cout <<theTriggerName <<"\t\tNo HLT filters" <<endl;
+    return false;
   }
-  else {cout <<theTriggerName <<"\t\tNo HLT filters" <<endl; return false;}
 }
 
-void BPHMonitor::case11_selection(const float & dimuonCL, const float & jpsi_cos, const GlobalPoint & displacementFromBeamspotJpsi, const GlobalError & jerr, const edm::Handle<reco::TrackCollection> & trHandle, const std::string & hltpath, const edm::Handle<trigger::TriggerEvent> & handleTriggerEvent, const reco::Muon& m, const reco::Muon& m1, const edm::ESHandle<MagneticField> & bFieldHandle, const reco::BeamSpot & vertexBeamSpot, MonitorElement* phi1, MonitorElement* eta1, MonitorElement* pT1, MonitorElement* phi2, MonitorElement* eta2, MonitorElement* pT2) {
-  //cout <<"\nInside case11_selection" <<endl;
-  if (dimuonCL < minprob) return;
-  if (fabs(jpsi_cos) < mincos) return;
-  if ((displacementFromBeamspotJpsi.perp() / sqrt(jerr.rerr(displacementFromBeamspotJpsi))) < minDS) return;
-  if (trHandle.isValid()) {
-    ////////////////////////
-    for (auto const & t : *trHandle) {
-      if (!trSelection_ref(t)) continue;
-      if (false && !matchToTrigger(hltpath,t, handleTriggerEvent)) continue;
-      if ((reco::deltaR(t,m) <= min_dR)) continue; // checking overlapping
-      if ((reco::deltaR(t,m1) <= min_dR)) continue;  // checking overlapping
-      for (auto const & t1 : *trHandle) {
-	if (&t - &(*trHandle)[0]  >=  &t1 - &(*trHandle)[0]) continue; // not enough, need the following DeltaR checks
-	//if (t.pt() == t1.pt()) continue;
-	if (!trSelection_ref(t1)) continue;
-	if (false && !matchToTrigger(hltpath,t1, handleTriggerEvent)) continue;
-	if ((reco::deltaR(t1,m) <= min_dR)) continue;  // checking overlapping
-	if ((reco::deltaR(t1,m1) <= min_dR)) continue; // checking overlapping
-	if ((reco::deltaR(t,t1) <= min_dR)) continue;  // checking overlapping
-	const reco::Track& itrk1 = t ;
-	const reco::Track& itrk2 = t1 ;
-	if (! itrk1.quality(reco::TrackBase::highPurity)) continue;
-	if (! itrk2.quality(reco::TrackBase::highPurity)) continue;
-	reco::Particle::LorentzVector pB, pTkTk, p1, p2, p3, p4;
-	double trackMass2 = kaon_mass * kaon_mass;
-	double MuMass2 = mu_mass * mu_mass; // 0.1056583745 *0.1056583745;
-	double e1 = sqrt(m.momentum().Mag2()  + MuMass2 );
-	double e2 = sqrt(m1.momentum().Mag2()  + MuMass2 );
-	double e3 = sqrt(itrk1.momentum().Mag2() + trackMass2  );
-	double e4 = sqrt(itrk2.momentum().Mag2() + trackMass2  );
-	p1 = reco::Particle::LorentzVector(m.px() , m.py() , m.pz() , e1  );
-	p2 = reco::Particle::LorentzVector(m1.px() , m1.py() , m1.pz() , e2  );
-	p3 = reco::Particle::LorentzVector(itrk1.px(), itrk1.py(), itrk1.pz(), e3  );
-	p4 = reco::Particle::LorentzVector(itrk2.px(), itrk2.py(), itrk2.pz(), e4  );
-	pTkTk = p3 + p4;
-	if (pTkTk.mass() > maxmassTkTk || pTkTk.mass() < minmassTkTk) continue;
-	pB = p1 + p2 + p3 + p4;
-	if ( pB.mass() > maxmassJpsiTk || pB.mass()< minmassJpsiTk) continue;
-	reco::TransientTrack mu1TT(m.track(), &(*bFieldHandle));
-	reco::TransientTrack mu2TT(m1.track(), &(*bFieldHandle));
-	reco::TransientTrack trTT(itrk1, &(*bFieldHandle));
-	reco::TransientTrack tr1TT(itrk2, &(*bFieldHandle));
-	std::vector<reco::TransientTrack> t_tks;
-	t_tks.push_back(mu1TT);
-	t_tks.push_back(mu2TT);
-	t_tks.push_back(trTT);
-	t_tks.push_back(tr1TT);
-	KalmanVertexFitter kvf;
-	TransientVertex tv  = kvf.vertex(t_tks); // this will compare the tracks
-	reco::Vertex vertex = tv;
-	if (!tv.isValid()) continue;
-	float JpsiTkCL = 0;
-	if ((vertex.chi2() >= 0.0) && (vertex.ndof() > 0) )
-	  JpsiTkCL = TMath::Prob(vertex.chi2(), vertex.ndof() );
-	math::XYZVector pperp(m.px() + m1.px() + itrk1.px() + itrk2.px(),
-			      m.py() + m1.py() + itrk1.py() + itrk2.py(),
-			      0.);
-	GlobalPoint secondaryVertex = tv.position();
-	GlobalError err             = tv.positionError();
-	GlobalPoint displacementFromBeamspot( -1*((vertexBeamSpot.x0() - secondaryVertex.x()) +
-						  (secondaryVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dxdz()),
-					      -1*((vertexBeamSpot.y0() - secondaryVertex.y()) +
-						  (secondaryVertex.z() - vertexBeamSpot.z0()) * vertexBeamSpot.dydz()),
-					      0);
-	reco::Vertex::Point vperp(displacementFromBeamspot.x(),displacementFromBeamspot.y(),0.);
-	float jpsiKcos = vperp.Dot(pperp) / (vperp.R()*pperp.R());
-	if (JpsiTkCL < minprob) continue;
-	if (fabs(jpsiKcos) < mincos) continue;
-	if ((displacementFromBeamspot.perp() / sqrt(err.rerr(displacementFromBeamspot))) < minDS) continue;
+std::string BPHMonitor::getTriggerName(std::string partialName) {
 
-	phi1->Fill(t.phi());
-	eta1->Fill(t.eta());
-	pT1->Fill(t.pt());
-	phi2->Fill(t1.phi());
-	eta2->Fill(t1.eta());
-	pT2->Fill(t1.pt());
-      } // for (auto const & t1 : *trHandle)
-    } // for (auto const & t : *trHandle)
-  } // if (trHandle.isValid())
+  const std::string trigger_name_tmp = partialName.substr(0,partialName.find("v*"));
+  const unsigned int Ntriggers(hltConfig_.size());
+  std::string trigger_name = "";
+  for (unsigned int i=0;i<Ntriggers;i++) {
+    trigger_name = hltConfig_.triggerName(i);
+    if ( trigger_name.find(trigger_name_tmp) != std::string::npos ) break;
+  }
+  // if ( trigger_name=="" ) {
+  //   std::cout << "WARNING: Could not find the trigger name." << std::endl;
+  // }
+
+  return trigger_name;
 }
 
 // Define this as a plug-in
